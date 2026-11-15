@@ -1,9 +1,25 @@
 package com.example.hakot.ui.screens
 
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.text.format.DateFormat
 import android.util.Log
 import android.util.Patterns
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.example.hakot.model.Route
+import com.example.hakot.data.SupabaseClient
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +44,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.style.TextAlign
 import com.example.hakot.ui.theme.RecycleYellowContainer
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.RadioButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -79,6 +97,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -93,6 +112,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.example.hakot.DumpTruckLogo
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.model.AccountApplication
@@ -117,6 +137,12 @@ import com.example.hakot.ui.theme.TextOnDarkMuted
 import com.example.hakot.ui.theme.TextOnDarkPrimary
 import com.example.hakot.ui.theme.TextOnDarkSecondary
 import kotlinx.coroutines.launch
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,10 +152,10 @@ fun AdminScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedAdminTab by remember { mutableIntStateOf(0) }
-    var selectedRoleMode by remember { mutableStateOf<UserRole?>(null) }
     var showRedeemModal by remember { mutableStateOf(false) }
     var showCreateAccountModal by remember { mutableStateOf(false) }
     var showRegistrationScreen by remember { mutableStateOf(false) }
+    var showActivationScreen by remember { mutableStateOf(false) }
 
     val isAuthenticated = HakotRepository.isAuthenticated
     val userRole = HakotRepository.currentAdminRole
@@ -138,39 +164,17 @@ fun AdminScreen(
         AccountRegistrationScreen(
             onBackToLogin = { showRegistrationScreen = false }
         )
-    } else if (selectedRoleMode == null && !isAuthenticated) {
-        RoleSelectionScreen(
-            onSelectRole = { role -> selectedRoleMode = role },
-            onExitPortal = onExitAdminMode
+    } else if (showActivationScreen) {
+        AccountActivationScreen(
+            onBackToLogin = { showActivationScreen = false }
         )
     } else if (!isAuthenticated) {
-        when (selectedRoleMode) {
-            UserRole.SYSTEM_OWNER -> AdminLoginScreen(
-                targetRole = UserRole.SYSTEM_OWNER,
-                onBackToRoleSelection = { selectedRoleMode = null },
-                onOpenRedeemModal = { showRedeemModal = true },
-                onOpenRegistration = { showRegistrationScreen = true },
-                onExitAdminPortal = onExitAdminMode
-            )
-            UserRole.DISTRICT_ADMIN, UserRole.MUNICIPAL_ADMIN -> AdminLoginScreen(
-                targetRole = UserRole.MUNICIPAL_ADMIN,
-                onBackToRoleSelection = { selectedRoleMode = null },
-                onOpenRedeemModal = { showRedeemModal = true },
-                onOpenRegistration = { showRegistrationScreen = true },
-                onExitAdminPortal = onExitAdminMode
-            )
-            UserRole.DRIVER -> AdminLoginScreen(
-                targetRole = UserRole.DRIVER,
-                onBackToRoleSelection = { selectedRoleMode = null },
-                onOpenRedeemModal = { showRedeemModal = true },
-                onOpenRegistration = { showRegistrationScreen = true },
-                onExitAdminPortal = onExitAdminMode
-            )
-            else -> RoleSelectionScreen(
-                onSelectRole = { role -> selectedRoleMode = role },
-                onExitPortal = onExitAdminMode
-            )
-        }
+        AdminLoginScreen(
+            onOpenRedeemModal = { showRedeemModal = true },
+            onOpenRegistration = { showRegistrationScreen = true },
+            onOpenActivation = { showActivationScreen = true },
+            onExitAdminPortal = onExitAdminMode
+        )
     } else {
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
@@ -178,7 +182,6 @@ fun AdminScreen(
             DriverDashboardView(onSignOut = {
                 scope.launch {
                     HakotRepository.logout(context)
-                    selectedRoleMode = null
                 }
             })
         } else {
@@ -249,7 +252,6 @@ fun AdminScreen(
                             onClick = {
                                 scope.launch {
                                     HakotRepository.logout(context)
-                                    selectedRoleMode = null
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceCard),
@@ -348,119 +350,18 @@ fun AdminScreen(
     }
 }
 
-@Composable
-fun RoleSelectionScreen(
-    onSelectRole: (UserRole) -> Unit,
-    onExitPortal: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(DarkBackground),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            DumpTruckLogo()
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("HAK", fontSize = 28.sp, fontWeight = FontWeight.Black, color = Color.White)
-                Icon(imageVector = Icons.Default.LocationOn, contentDescription = "Pin", tint = EcoGreenPrimary, modifier = Modifier.size(24.dp))
-                Text("T", fontSize = 28.sp, fontWeight = FontWeight.Black, color = Color.White)
-            }
-            Text("PROTECTED ACCESS PORTAL", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp, color = EcoGreenLight)
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Text("CHOOSE YOUR ACCOUNT TYPE FIRST:", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = TextOnDarkMuted)
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            Card(
-                onClick = { onSelectRole(UserRole.MUNICIPAL_ADMIN) },
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.5.dp, EcoGreenPrimary, RoundedCornerShape(18.dp))
-            ) {
-                Row(
-                    modifier = Modifier.padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(EcoGreenContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(imageVector = Icons.Default.AdminPanelSettings, contentDescription = "Admin", tint = EcoGreenPrimary, modifier = Modifier.size(28.dp))
-                    }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column {
-                        Text("Municipal / District Admin", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                        Text("Manage routes, trucks, schedules, & citizen reports", fontSize = 11.sp, color = TextOnDarkSecondary)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                onClick = { onSelectRole(UserRole.DRIVER) },
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.5.dp, DarkBorder, RoundedCornerShape(18.dp))
-            ) {
-                Row(
-                    modifier = Modifier.padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(DarkSurfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(imageVector = Icons.Default.DirectionsBus, contentDescription = "Trucker", tint = RecycleYellow, modifier = Modifier.size(28.dp))
-                    }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column {
-                        Text("Truck Operator / Driver", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                        Text("View assigned collection routes & send live GPS", fontSize = 11.sp, color = TextOnDarkSecondary)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            TextButton(onClick = onExitPortal) {
-                Text("Return to Public Citizen Mode", fontSize = 12.sp, color = TextOnDarkMuted)
-            }
-        }
-    }
-}
 
 @Composable
 fun SystemOwnerApplicationsReviewView() {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var isLoading by remember { mutableStateOf(false) }
     var isProcessingDecision by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
     var selectedApplication by remember { mutableStateOf<AccountApplication?>(null) }
-    var showApproveConfirm by remember { mutableStateOf(false) }
-    var showRejectConfirm by remember { mutableStateOf(false) }
+    var inspectCertPath by remember { mutableStateOf<String?>(null) }
 
     val applications = HakotRepository.accountApplications
 
@@ -545,33 +446,45 @@ fun SystemOwnerApplicationsReviewView() {
                 }
             }
         } else {
+            val expandedApplicationIds = remember { mutableStateMapOf<String, Boolean>() }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(applications) { app ->
+                    val isExpanded = expandedApplicationIds[app.applicationId] == true
                     Card(
                         colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
-                            .clickable(enabled = !isProcessingDecision) { selectedApplication = app }
+                            .border(1.dp, if (isExpanded) EcoGreenPrimary else DarkBorder, RoundedCornerShape(14.dp))
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !isProcessingDecision) {
+                                        expandedApplicationIds[app.applicationId] = !isExpanded
+                                    },
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(app.fullName, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Text(app.fullName, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (isExpanded) "▲" else "▼", fontSize = 12.sp, color = EcoGreenLight)
+                                }
                                 Surface(
                                     color = when (app.status) {
                                         ApplicationStatus.PENDING -> RecycleYellowContainer
                                         ApplicationStatus.APPROVED -> EcoGreenContainer
                                         ApplicationStatus.REJECTED -> HazardousRed.copy(alpha = 0.2f)
                                     },
-                                    shape = RoundedCornerShape(6.dp)
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.clickable {
+                                        expandedApplicationIds[app.applicationId] = !isExpanded
+                                    }
                                 ) {
                                     Text(
                                         text = app.status.label,
@@ -588,9 +501,51 @@ fun SystemOwnerApplicationsReviewView() {
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text("Email: ${app.email} • Contact: ${app.contactNumber}", fontSize = 11.sp, color = TextOnDarkSecondary)
-                            Text("Office: ${app.officeDepartment} (${app.officialPosition})", fontSize = 11.sp, color = TextOnDarkSecondary)
-                            Text("Requested Role: ${app.requestedRole.label}", fontSize = 11.sp, color = EcoGreenLight)
+                            if (app.organizationName.isNotBlank()) {
+                                Text("Organization: ${app.organizationName} (${app.organizationType})", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            }
+                            Text("Municipality: ${app.municipality}", fontSize = 11.sp, color = TextOnDarkSecondary)
+
+                            if (isExpanded) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(DarkBorder))
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text("Detailed Application Information:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("• Organization Name: ${app.organizationName.ifBlank { "N/A" }}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Organization Type: ${app.organizationType}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Municipality Scope: ${app.municipality}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Administrator Full Name: ${app.fullName}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Administrator Email: ${app.email}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Contact Number: ${app.contactNumber}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Office / Department: ${app.officeDepartment} (${app.officialPosition})", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Application Status: ${app.status.label}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                val dateFormatted = try {
+                                    DateFormat.format("MMM dd, yyyy • hh:mm a",
+                                        Date(app.createdAtMillis)
+                                    ).toString()
+                                } catch (_: Exception) { "N/A" }
+                                Text("• Submission Date: $dateFormatted", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Requested Role: ${app.requestedRole.label}", fontSize = 11.sp, color = TextOnDarkSecondary)
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                            } else {
+                                Text("Admin: ${app.fullName} • Email: ${app.email}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("Contact: ${app.contactNumber} • Office: ${app.officeDepartment}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                            }
+
+                            if (app.certificatePath.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                TextButton(
+                                    onClick = { inspectCertPath = app.certificatePath },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Key, contentDescription = "Cert", tint = EcoGreenPrimary, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("View Certificate of Operation", fontSize = 11.sp, color = EcoGreenPrimary, fontWeight = FontWeight.Bold)
+                                }
+                            }
 
                             if (app.status == ApplicationStatus.PENDING) {
                                 Spacer(modifier = Modifier.height(10.dp))
@@ -601,27 +556,72 @@ fun SystemOwnerApplicationsReviewView() {
                                     Button(
                                         enabled = !isProcessingDecision,
                                         onClick = {
-                                            selectedApplication = app
-                                            showRejectConfirm = true
+                                            Log.d("HAKOT_APPROVAL_DEBUG", "Reject button clicked for application ID: ${app.applicationId}")
+                                            scope.launch {
+                                                isProcessingDecision = true
+                                                selectedApplication = app
+                                                errorMessage = null
+                                                successMessage = null
+                                                val res = HakotRepository.updateAccountApplicationStatus(app.applicationId, ApplicationStatus.REJECTED)
+                                                isProcessingDecision = false
+                                                selectedApplication = null
+                                                if (res.first) {
+                                                    HakotRepository.fetchAccountApplications()
+                                                    successMessage = "Application rejected and removed successfully."
+                                                    Toast.makeText(context, "Application rejected and removed successfully.", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    errorMessage = res.second
+                                                    Toast.makeText(context, "Rejection failed: ${res.second}", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
                                         },
                                         colors = ButtonDefaults.buttonColors(containerColor = HazardousRed.copy(alpha = 0.2f)),
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
-                                        Text("Reject", color = HazardousRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        if (isProcessingDecision && selectedApplication?.applicationId == app.applicationId) {
+                                            CircularProgressIndicator(modifier = Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
+                                        } else {
+                                            Text("Reject", color = HazardousRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Button(
                                         enabled = !isProcessingDecision,
                                         onClick = {
+                                            Log.d("HAKOT_APPROVAL_DEBUG", "1. Approve button clicked for application ID: ${app.applicationId}, Org: ${app.organizationName}")
                                             selectedApplication = app
-                                            showApproveConfirm = true
+                                            Log.d("HAKOT_APPROVAL_DEBUG", "2. Application ID retrieved: ${app.applicationId}")
+                                            scope.launch {
+                                                isProcessingDecision = true
+                                                errorMessage = null
+                                                successMessage = null
+                                                Log.d("HAKOT_APPROVAL_DEBUG", "3. Approval function called (updateAccountApplicationStatus)")
+                                                val res = HakotRepository.updateAccountApplicationStatus(app.applicationId, ApplicationStatus.APPROVED)
+                                                isProcessingDecision = false
+                                                if (res.first) {
+                                                    HakotRepository.fetchAccountApplications()
+                                                    successMessage = "Application approved successfully and account activated."
+                                                    Log.d("HAKOT_APPROVAL_DEBUG", "8. UI updated: success message displayed")
+                                                    Toast.makeText(context, "Application approved successfully!", Toast.LENGTH_SHORT).show()
+                                                    selectedApplication = null
+                                                } else {
+                                                    errorMessage = res.second
+                                                    Toast.makeText(context, "Approval failed: ${res.second}", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
                                         },
                                         colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
-                                        Text("Approve", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        if (isProcessingDecision && selectedApplication?.applicationId == app.applicationId) {
+                                            CircularProgressIndicator(modifier = Modifier.size(14.dp), color = Color.Black, strokeWidth = 2.dp)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Approving...", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        } else {
+                                            Text("Approve", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }
@@ -632,118 +632,176 @@ fun SystemOwnerApplicationsReviewView() {
         }
     }
 
-    if (showApproveConfirm && selectedApplication != null) {
+    if (inspectCertPath != null) {
+        val path = inspectCertPath!!
+        val certUrl = "${SupabaseClient.SUPABASE_URL}/storage/v1/object/authenticated/$path"
+        val isImage = path.lowercase().endsWith(".png") || path.lowercase().endsWith(".jpg") || path.lowercase().endsWith(".jpeg")
+        val isPdf = path.lowercase().endsWith(".pdf")
+
+        var bitmap by remember(path) { mutableStateOf<Bitmap?>(null) }
+        var isLoadingImage by remember(path) { mutableStateOf(isImage) }
+        var loadError by remember(path) { mutableStateOf<String?>(null) }
+        val context = LocalContext.current
+
+        LaunchedEffect(path) {
+            if (isImage) {
+                withContext(Dispatchers.IO) {
+                    try {
+                        val token = HakotRepository.getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+                        val conn = (URL(certUrl).openConnection() as HttpURLConnection).apply {
+                            requestMethod = "GET"
+                            setRequestProperty("apikey", SupabaseClient.SUPABASE_ANON_KEY)
+                            setRequestProperty("Authorization", "Bearer $token")
+                            connectTimeout = 15000
+                            readTimeout = 15000
+                        }
+                        val bmp = BitmapFactory.decodeStream(conn.inputStream)
+                        if (bmp != null) {
+                            bitmap = bmp
+                        } else {
+                            loadError = "Unable to decode image from storage."
+                        }
+                        conn.disconnect()
+                    } catch (e: Exception) {
+                        loadError = "Failed to load image: ${e.message}"
+                    } finally {
+                        isLoadingImage = false
+                    }
+                }
+            }
+        }
+
         AlertDialog(
-            onDismissRequest = {
-                if (!isProcessingDecision) {
-                    showApproveConfirm = false
-                    selectedApplication = null
+            onDismissRequest = { inspectCertPath = null },
+            title = { Text("Certificate of Operation Preview") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Storage Path: $path", fontSize = 11.sp, color = TextOnDarkSecondary)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (isImage) {
+                        if (isLoadingImage) {
+                            CircularProgressIndicator(color = EcoGreenPrimary, modifier = Modifier.size(36.dp))
+                        } else if (loadError != null) {
+                            Text(loadError ?: "Error loading image", color = HazardousRed, fontSize = 12.sp)
+                        } else if (bitmap != null) {
+                            Image(
+                                bitmap = bitmap!!.asImageBitmap(),
+                                contentDescription = "Certificate Image",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(260.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                            )
+                        }
+                    } else if (isPdf) {
+                        var isDownloadingPdf by remember { mutableStateOf(false) }
+                        var pdfError by remember { mutableStateOf<String?>(null) }
+
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(imageVector = Icons.Default.Key, contentDescription = "PDF", tint = EcoGreenPrimary, modifier = Modifier.size(48.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("PDF Document Certificate", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            pdfError?.let {
+                                Text(it, fontSize = 11.sp, color = HazardousRed)
+                                Spacer(modifier = Modifier.height(4.dp))
+                            }
+
+                            Button(
+                                enabled = !isDownloadingPdf,
+                                onClick = {
+                                    scope.launch {
+                                        isDownloadingPdf = true
+                                        pdfError = null
+                                        try {
+                                            val token = HakotRepository.getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+                                            val downloadedFile: File = withContext(Dispatchers.IO) {
+                                                val conn = (URL(certUrl).openConnection() as HttpURLConnection).apply {
+                                                    requestMethod = "GET"
+                                                    setRequestProperty("apikey", SupabaseClient.SUPABASE_ANON_KEY)
+                                                    setRequestProperty("Authorization", "Bearer $token")
+                                                    connectTimeout = 20000
+                                                    readTimeout = 20000
+                                                }
+                                                val code = conn.responseCode
+                                                if (code !in 200..299) {
+                                                    val errStr = try { conn.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
+                                                    conn.disconnect()
+                                                    throw Exception("HTTP $code: ${errStr ?: "Server returned error"}")
+                                                }
+
+                                                val file = File(context.cacheDir, "certificate_preview.pdf")
+                                                file.outputStream().use { out ->
+                                                    conn.inputStream.copyTo(out)
+                                                }
+                                                conn.disconnect()
+
+                                                if (!file.exists() || file.length() < 10) {
+                                                    file.delete()
+                                                    throw Exception("Downloaded PDF file is empty or incomplete.")
+                                                }
+
+                                                val headerBytes = ByteArray(4)
+                                                file.inputStream().use { stream ->
+                                                    stream.read(headerBytes)
+                                                }
+                                                val headerStr = String(headerBytes, Charsets.US_ASCII)
+                                                if (headerStr != "%PDF") {
+                                                    file.delete()
+                                                    throw Exception("Downloaded file is not a valid PDF document.")
+                                                }
+
+                                                file
+                                            }
+
+                                            val contentUri = FileProvider.getUriForFile(
+                                                context,
+                                                "${context.packageName}.fileprovider",
+                                                downloadedFile
+                                            )
+
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(contentUri, "application/pdf")
+                                                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                                            }
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            pdfError = "Failed to download/open PDF: ${e.message}"
+                                        } finally {
+                                            isDownloadingPdf = false
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                if (isDownloadingPdf) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Downloading...", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                } else {
+                                    Text("Open PDF Document", color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    } else {
+                        Text("Document format not previewable directly.", fontSize = 12.sp, color = TextOnDarkSecondary)
+                    }
                 }
             },
-            title = { Text("Approve Application?") },
-            text = { Text("Are you sure you want to approve ${selectedApplication?.fullName} for ${selectedApplication?.requestedRole?.label}?") },
             confirmButton = {
                 Button(
-                    enabled = !isProcessingDecision,
-                    onClick = {
-                        val app = selectedApplication ?: return@Button
-                        scope.launch {
-                            isProcessingDecision = true
-                            errorMessage = null
-                            successMessage = null
-                            val res = HakotRepository.updateAccountApplicationStatus(app.applicationId, ApplicationStatus.APPROVED)
-                            if (res.first) {
-                                HakotRepository.fetchAccountApplications()
-                                successMessage = "Application approved successfully."
-                                showApproveConfirm = false
-                                selectedApplication = null
-                            } else {
-                                errorMessage = res.second
-                            }
-                            isProcessingDecision = false
-                        }
-                    },
+                    onClick = { inspectCertPath = null },
                     colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
                 ) {
-                    if (isProcessingDecision) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.Black,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text("Approve", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !isProcessingDecision,
-                    onClick = {
-                        showApproveConfirm = false
-                        selectedApplication = null
-                    }
-                ) {
-                    Text("Cancel", color = TextOnDarkSecondary)
-                }
-            },
-            containerColor = DarkSurfaceCard
-        )
-    }
-
-    if (showRejectConfirm && selectedApplication != null) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!isProcessingDecision) {
-                    showRejectConfirm = false
-                    selectedApplication = null
-                }
-            },
-            title = { Text("Reject Application?") },
-            text = { Text("Are you sure you want to reject ${selectedApplication?.fullName}'s application?") },
-            confirmButton = {
-                Button(
-                    enabled = !isProcessingDecision,
-                    onClick = {
-                        val app = selectedApplication ?: return@Button
-                        scope.launch {
-                            isProcessingDecision = true
-                            errorMessage = null
-                            successMessage = null
-                            val res = HakotRepository.updateAccountApplicationStatus(app.applicationId, ApplicationStatus.REJECTED)
-                            if (res.first) {
-                                HakotRepository.fetchAccountApplications()
-                                successMessage = "Application rejected successfully."
-                                showRejectConfirm = false
-                                selectedApplication = null
-                            } else {
-                                errorMessage = res.second
-                            }
-                            isProcessingDecision = false
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed)
-                ) {
-                    if (isProcessingDecision) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text("Reject", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !isProcessingDecision,
-                    onClick = {
-                        showRejectConfirm = false
-                        selectedApplication = null
-                    }
-                ) {
-                    Text("Cancel", color = TextOnDarkSecondary)
+                    Text("Close", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             },
             containerColor = DarkSurfaceCard
@@ -753,10 +811,9 @@ fun SystemOwnerApplicationsReviewView() {
 
 @Composable
 fun AdminLoginScreen(
-    targetRole: UserRole,
-    onBackToRoleSelection: () -> Unit,
     onOpenRedeemModal: () -> Unit,
     onOpenRegistration: () -> Unit,
+    onOpenActivation: () -> Unit,
     onExitAdminPortal: () -> Unit
 ) {
     val context = LocalContext.current
@@ -784,37 +841,18 @@ fun AdminLoginScreen(
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start
-                ) {
-                    TextButton(onClick = onBackToRoleSelection) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = EcoGreenLight, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("← Back to Role Selection", fontSize = 11.sp, color = EcoGreenLight)
-                    }
-                }
-
                 DumpTruckLogo()
 
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = when (targetRole) {
-                        UserRole.SYSTEM_OWNER -> "SYSTEM OWNER LOGIN"
-                        UserRole.DRIVER -> "HAKOT TRUCKER LOGIN"
-                        else -> "MUNICIPAL ADMIN LOGIN"
-                    },
-                    fontSize = 16.sp,
+                    text = "HAKOT PORTAL LOGIN",
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = when (targetRole) {
-                        UserRole.SYSTEM_OWNER -> RecycleYellow
-                        UserRole.DRIVER -> RecycleYellow
-                        else -> EcoGreenLight
-                    }
+                    color = EcoGreenLight
                 )
                 Text(
-                    text = "Enter your credentials to access ${targetRole.label} functions",
+                    text = "Enter your credentials to access your assigned role",
                     fontSize = 11.sp,
                     color = TextOnDarkSecondary
                 )
@@ -869,12 +907,23 @@ fun AdminLoginScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = {
+                        Toast.makeText(context, "Password reset: Please contact your system administrator or check email instructions.", Toast.LENGTH_LONG).show()
+                    }) {
+                        Text("Forgot Password?", fontSize = 11.sp, color = EcoGreenLight)
+                    }
+                }
+
                 errorMessage?.let {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(it, color = HazardousRed, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Button(
                     onClick = {
@@ -882,7 +931,7 @@ fun AdminLoginScreen(
                             scope.launch {
                                 isLoading = true
                                 errorMessage = null
-                                val success = HakotRepository.login(context, emailInput, passwordInput, targetRole)
+                                val success = HakotRepository.login(context, emailInput, passwordInput)
                                 isLoading = false
                                 if (success) {
                                     Toast.makeText(context, "Sign In Successful!", Toast.LENGTH_SHORT).show()
@@ -895,7 +944,7 @@ fun AdminLoginScreen(
                         }
                     },
                     enabled = !isLoading,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (targetRole == UserRole.DRIVER || targetRole == UserRole.SYSTEM_OWNER) RecycleYellow else EcoGreenPrimary),
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth().height(48.dp)
                 ) {
@@ -903,11 +952,7 @@ fun AdminLoginScreen(
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.Black, strokeWidth = 2.dp)
                     } else {
                         Text(
-                            text = when (targetRole) {
-                                UserRole.SYSTEM_OWNER -> "Sign In as System Owner"
-                                UserRole.DRIVER -> "Sign In as Trucker"
-                                else -> "Sign In as Admin"
-                            },
+                            text = "Sign In",
                             color = Color.Black,
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
@@ -917,13 +962,11 @@ fun AdminLoginScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                if (targetRole == UserRole.MUNICIPAL_ADMIN || targetRole == UserRole.DISTRICT_ADMIN) {
-                    TextButton(onClick = onOpenRedeemModal) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(imageVector = Icons.Default.Key, contentDescription = "Code", tint = EcoGreenPrimary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Redeem Invitation Code", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenPrimary)
-                        }
+                TextButton(onClick = onOpenRedeemModal) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Key, contentDescription = "Code", tint = EcoGreenPrimary, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Redeem Invitation Code", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenPrimary)
                     }
                 }
 
@@ -934,6 +977,20 @@ fun AdminLoginScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("New Applicant? Register for Access", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                     }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                TextButton(onClick = onOpenActivation) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Key, contentDescription = "Activate", tint = EcoGreenLight, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Have an Activation Code? Activate Account", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = onExitAdminPortal) {
+                    Text("Return to Public Citizen Mode", fontSize = 12.sp, color = TextOnDarkMuted)
                 }
             }
         }
@@ -1892,22 +1949,182 @@ fun InvitationDetailsModal(
 
 @Composable
 fun AdminRoutesView() {
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 20.dp)
-    ) {
-        items(HakotRepository.routes) { rt ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+    var showPlannerModal by remember { mutableStateOf(false) }
+    var editingRoute by remember { mutableStateOf<Route?>(null) }
+    val nasugbuBarangays = remember {
+        listOf(
+            "Barangay 1 (Town Proper)", "Barangay 2 (Town Proper)", "Barangay 3 (Town Proper)", "Barangay 4 (Town Proper)",
+            "Bucana", "Caluangan", "Kaylaway", "Wawa", "Looc", "Natipuan", "Papaya", "Balaytigue", "Pantalan"
+        )
+    }
+    val nasugbuStreets = remember {
+        listOf("J.P. Laurel St", "Rizal St", "Nasugbu-Ternate Highway", "Palico-Balayan Highway", "P. Roxas St", "Escalera St", "Mabini St")
+    }
+
+    var routeNameInput by remember { mutableStateOf("") }
+    var selectedBarangay by remember { mutableStateOf(nasugbuBarangays[0]) }
+    var selectedStreets by remember { mutableStateOf(listOf<String>()) }
+    var successMsg by remember { mutableStateOf<String?>(null) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Collection Routes & GIS Segments", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+            Button(
+                onClick = {
+                    routeNameInput = ""
+                    selectedBarangay = nasugbuBarangays[0]
+                    selectedStreets = listOf(nasugbuStreets[0])
+                    editingRoute = null
+                    showPlannerModal = true
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(rt.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    Text("📍 ${rt.barangaysCovered}", fontSize = 12.sp, color = EcoGreenLight)
+                Text("+ Plan New Route", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        successMsg?.let {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = EcoGreenContainer),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(10.dp))
+            ) {
+                Text(it, color = EcoGreenLight, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(bottom = 20.dp)
+        ) {
+            items(HakotRepository.routes) { rt ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(rt.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            TextButton(onClick = {
+                                routeNameInput = rt.routeName
+                                selectedStreets = rt.street
+                                editingRoute = rt
+                                showPlannerModal = true
+                            }) {
+                                Text("Edit Route", fontSize = 11.sp, color = EcoGreenLight)
+                            }
+                        }
+                        Text("📍 ${rt.barangaysCovered}", fontSize = 12.sp, color = EcoGreenLight)
+                        Text("Streets: ${rt.street.joinToString(", ")}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                    }
                 }
             }
         }
+    }
+
+    if (showPlannerModal) {
+        AlertDialog(
+            onDismissRequest = { showPlannerModal = false },
+            title = { Text(if (editingRoute == null) "Plan Map-Based Route" else "Edit Planned Route") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = routeNameInput,
+                        onValueChange = { routeNameInput = it },
+                        label = { Text("Route Name (e.g. Zone 1 - Wawa Loop)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Select Barangay Scope (42 Nasugbu Barangays):", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                    nasugbuBarangays.take(6).forEach { bgy ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { selectedBarangay = bgy }.fillMaxWidth().padding(vertical = 2.dp)
+                        ) {
+                            RadioButton(selected = selectedBarangay == bgy, onClick = { selectedBarangay = bgy })
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(bgy, fontSize = 11.sp, color = TextOnDarkPrimary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Select Road Segments (PostGIS Road Geometry):", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                    nasugbuStreets.forEach { street ->
+                        val isSelected = selectedStreets.contains(street)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable {
+                                selectedStreets = if (isSelected) selectedStreets - street else selectedStreets + street
+                            }.fillMaxWidth().padding(vertical = 2.dp)
+                        ) {
+                            Checkbox(checked = isSelected, onCheckedChange = { checked ->
+                                selectedStreets = if (checked) selectedStreets + street else selectedStreets - street
+                            })
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(street, fontSize = 11.sp, color = TextOnDarkPrimary)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (routeNameInput.isNotBlank() && selectedStreets.isNotEmpty()) {
+                            if (editingRoute != null) {
+                                editingRoute?.routeName = routeNameInput.trim()
+                                editingRoute?.street = selectedStreets
+                            } else {
+                                val newRoute = Route(
+                                    routeName = routeNameInput.trim(),
+                                    street = selectedStreets,
+                                    id = "rt_${System.currentTimeMillis()}",
+                                    barangaysCovered = "$selectedBarangay (${selectedStreets.joinToString(", ")})"
+                                )
+                                HakotRepository.routes.add(newRoute)
+                            }
+                            successMsg = "Route '${routeNameInput.trim()}' saved successfully!"
+                            showPlannerModal = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Save Route", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPlannerModal = false }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
     }
 }
 
@@ -2141,14 +2358,37 @@ fun AccountRegistrationScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var orgNameInput by remember { mutableStateOf("") }
+    var municipalityInput by remember { mutableStateOf("Nasugbu, Batangas") }
+    var orgTypeInput by remember { mutableStateOf("Government / Municipal Office") }
     var fullNameInput by remember { mutableStateOf("") }
     var emailInput by remember { mutableStateOf("") }
     var contactInput by remember { mutableStateOf("") }
-    var municipalityInput by remember { mutableStateOf("Nasugbu, Batangas") }
     var officeInput by remember { mutableStateOf("Municipal Sanitation Office") }
-    var positionInput by remember { mutableStateOf("Sanitation Inspector") }
-    var requestedRole by remember { mutableStateOf(UserRole.MUNICIPAL_STAFF) }
-    var companyNameInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+    var confirmPasswordInput by remember { mutableStateOf("") }
+    var isPasswordVisible by remember { mutableStateOf(false) }
+    var isConfirmPasswordVisible by remember { mutableStateOf(false) }
+
+    var certUri by remember { mutableStateOf<Uri?>(null) }
+    var certFileName by remember { mutableStateOf<String?>(null) }
+
+    val certLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            certUri = uri
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            val nameIndex = cursor?.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            cursor?.use {
+                if (it.moveToFirst() && nameIndex != null && nameIndex >= 0) {
+                    certFileName = it.getString(nameIndex)
+                }
+            }
+            if (certFileName == null) {
+                certFileName = uri.lastPathSegment ?: "Certificate_Document"
+            }
+        }
+    }
+
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isSubmitting by remember { mutableStateOf(false) }
     var isSubmitted by remember { mutableStateOf(false) }
@@ -2185,13 +2425,13 @@ fun AccountRegistrationScreen(
                 }
 
                 Text(
-                    text = "REQUEST MUNICIPAL ACCOUNT ACCESS",
+                    text = "ORGANIZATION ACCESS APPLICATION",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = EcoGreenLight
                 )
                 Text(
-                    text = "New account applications start as PENDING System Owner review.",
+                    text = "Provide organization details and certificate of operation for System Owner review.",
                     fontSize = 11.sp,
                     color = TextOnDarkSecondary,
                     textAlign = TextAlign.Center
@@ -2214,7 +2454,7 @@ fun AccountRegistrationScreen(
                             Text("Application Submitted Successfully!", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                "Your account application has been submitted and is currently PENDING System Owner review. You will receive access once approved.",
+                                "Your organization account application has been submitted and is currently PENDING System Owner review. You will receive an email activation code once approved.",
                                 fontSize = 12.sp,
                                 color = TextOnDarkSecondary,
                                 textAlign = TextAlign.Center
@@ -2232,29 +2472,9 @@ fun AccountRegistrationScreen(
                     }
                 } else {
                     OutlinedTextField(
-                        value = fullNameInput,
-                        onValueChange = { fullNameInput = it; errorMessage = null },
-                        label = { Text("Full Name") },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = emailInput,
-                        onValueChange = { emailInput = it; errorMessage = null },
-                        label = { Text("Email Address") },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedTextField(
-                        value = contactInput,
-                        onValueChange = { contactInput = it; errorMessage = null },
-                        label = { Text("Contact Number") },
+                        value = orgNameInput,
+                        onValueChange = { orgNameInput = it; errorMessage = null },
+                        label = { Text("Organization Name (Required)") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
                         modifier = Modifier.fillMaxWidth()
@@ -2264,7 +2484,59 @@ fun AccountRegistrationScreen(
                     OutlinedTextField(
                         value = municipalityInput,
                         onValueChange = { municipalityInput = it; errorMessage = null },
-                        label = { Text("Municipality / LGU Scope") },
+                        label = { Text("Municipality / LGU Scope (Required)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text("Organization Type:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, modifier = Modifier.align(Alignment.Start))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = orgTypeInput == "Government / Municipal Office",
+                            onClick = { orgTypeInput = "Government / Municipal Office" },
+                            label = { Text("Government / Municipal Office", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight)
+                        )
+                        FilterChip(
+                            selected = orgTypeInput == "Private Company",
+                            onClick = { orgTypeInput = "Private Company" },
+                            label = { Text("Private Company", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = fullNameInput,
+                        onValueChange = { fullNameInput = it; errorMessage = null },
+                        label = { Text("Administrator Full Name (Required)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = emailInput,
+                        onValueChange = { emailInput = it; errorMessage = null },
+                        label = { Text("Administrator Email Address (Login & Activation)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = contactInput,
+                        onValueChange = { contactInput = it; errorMessage = null },
+                        label = { Text("Contact Number (Mobile / Landline)") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
                         modifier = Modifier.fillMaxWidth()
@@ -2282,58 +2554,171 @@ fun AccountRegistrationScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     OutlinedTextField(
-                        value = positionInput,
-                        onValueChange = { positionInput = it; errorMessage = null },
-                        label = { Text("Official Position") },
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it; errorMessage = null },
+                        label = { Text("Password (min 8 characters)") },
+                        leadingIcon = { Icon(imageVector = Icons.Default.Lock, contentDescription = "Password", tint = TextOnDarkSecondary) },
+                        trailingIcon = {
+                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
+                                Icon(
+                                    imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Password",
+                                    tint = TextOnDarkSecondary
+                                )
+                            }
+                        },
+                        visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = confirmPasswordInput,
+                        onValueChange = { confirmPasswordInput = it; errorMessage = null },
+                        label = { Text("Confirm Password") },
+                        leadingIcon = { Icon(imageVector = Icons.Default.Lock, contentDescription = "Confirm Password", tint = TextOnDarkSecondary) },
+                        trailingIcon = {
+                            IconButton(onClick = { isConfirmPasswordVisible = !isConfirmPasswordVisible }) {
+                                Icon(
+                                    imageVector = if (isConfirmPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Password",
+                                    tint = TextOnDarkSecondary
+                                )
+                            }
+                        },
+                        visualTransformation = if (isConfirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text("Requested Account Type:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, modifier = Modifier.align(Alignment.Start))
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    // Certificate of Operation Upload
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, EcoGreenPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                     ) {
-                        FilterChip(
-                            selected = requestedRole == UserRole.MUNICIPAL_ADMIN,
-                            onClick = { requestedRole = UserRole.MUNICIPAL_ADMIN },
-                            label = { Text("Municipal Admin", fontSize = 10.sp) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight)
-                        )
-                        FilterChip(
-                            selected = requestedRole == UserRole.COMPANY_ADMIN,
-                            onClick = { requestedRole = UserRole.COMPANY_ADMIN },
-                            label = { Text("Company Admin", fontSize = 10.sp) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight)
-                        )
-                        FilterChip(
-                            selected = requestedRole == UserRole.MUNICIPAL_STAFF,
-                            onClick = { requestedRole = UserRole.MUNICIPAL_STAFF },
-                            label = { Text("Municipal Staff", fontSize = 10.sp) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight)
-                        )
-                        FilterChip(
-                            selected = requestedRole == UserRole.DRIVER,
-                            onClick = { requestedRole = UserRole.DRIVER },
-                            label = { Text("Driver", fontSize = 10.sp) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = RecycleYellowContainer, selectedLabelColor = RecycleYellow)
-                        )
-                    }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(imageVector = Icons.Default.Mail, contentDescription = "Upload", tint = EcoGreenPrimary, modifier = Modifier.size(28.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Upload Certificate of Operation", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                "Drag and drop an image here, paste a copied image, or browse files.",
+                                fontSize = 11.sp,
+                                color = TextOnDarkSecondary,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                "Supported formats: JPG, JPEG, PNG, PDF • Max file size: 5MB",
+                                fontSize = 10.sp,
+                                color = TextOnDarkMuted,
+                                textAlign = TextAlign.Center
+                            )
 
-                    if (requestedRole == UserRole.COMPANY_ADMIN) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = companyNameInput,
-                            onValueChange = { companyNameInput = it; errorMessage = null },
-                            label = { Text("Company Name") },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = EcoGreenPrimary, unfocusedBorderColor = DarkBorder, focusedTextColor = TextOnDarkPrimary, unfocusedTextColor = TextOnDarkPrimary),
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            if (certFileName != null) {
+                                Surface(
+                                    color = EcoGreenContainer,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, EcoGreenPrimary)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                            Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "Selected", tint = EcoGreenLight, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = certFileName ?: "",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextOnDarkPrimary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        TextButton(onClick = { certUri = null; certFileName = null }) {
+                                            Text("Remove", fontSize = 11.sp, color = HazardousRed)
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { certLauncher.launch("*/*") },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).height(40.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Key, contentDescription = "Browse", tint = Color.Black, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Browse Files", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        try {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            val clip = clipboard.primaryClip
+                                            if (clip != null && clip.itemCount > 0) {
+                                                val item = clip.getItemAt(0)
+                                                val uri = item.uri
+                                                if (uri != null) {
+                                                    certUri = uri
+                                                    val cursor = context.contentResolver.query(uri, null, null, null, null)
+                                                    val nameIndex = cursor?.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                                    cursor?.use {
+                                                        if (it.moveToFirst() && nameIndex != null && nameIndex >= 0) {
+                                                            certFileName = it.getString(nameIndex)
+                                                        }
+                                                    }
+                                                    if (certFileName == null) {
+                                                        certFileName = uri.lastPathSegment ?: "Pasted_Certificate.png"
+                                                    }
+                                                    Toast.makeText(context, "Image pasted from clipboard successfully!", Toast.LENGTH_SHORT).show()
+                                                } else if (item.text != null) {
+                                                    Toast.makeText(context, "Clipboard contains text, not an image/file.", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "No valid image found in clipboard.", Toast.LENGTH_SHORT).show()
+                                                }
+                                            } else {
+                                                Toast.makeText(context, "Clipboard is empty.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Paste failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenContainer),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).height(40.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Key, contentDescription = "Paste", tint = EcoGreenLight, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Paste Image", color = EcoGreenLight, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+                            }
+                        }
                     }
 
                     errorMessage?.let {
@@ -2345,37 +2730,84 @@ fun AccountRegistrationScreen(
 
                     Button(
                         onClick = {
-                            Log.d("HAKOT_SUBMIT_UI", "Submit account application button clicked.")
-                            if (fullNameInput.isBlank() || emailInput.isBlank() || contactInput.isBlank() || municipalityInput.isBlank() || officeInput.isBlank() || positionInput.isBlank()) {
-                                Log.d("HAKOT_SUBMIT_UI", "Validation failed: required fields are blank.")
-                                errorMessage = "Please fill in all required registration fields."
-                            } else if (requestedRole == UserRole.COMPANY_ADMIN && companyNameInput.isBlank()) {
-                                Log.d("HAKOT_SUBMIT_UI", "Validation failed: company name is blank for Company Admin.")
-                                errorMessage = "Please enter a company name."
+                            Log.d("HAKOT_SUBMIT_UI", "Submit organization account application clicked.")
+                            if (orgNameInput.isBlank() || municipalityInput.isBlank() || fullNameInput.isBlank() || emailInput.isBlank() || contactInput.isBlank() || officeInput.isBlank() || passwordInput.isBlank() || confirmPasswordInput.isBlank()) {
+                                errorMessage = "Please fill in all required registration fields, including passwords."
+                            } else if (passwordInput.length < 8) {
+                                errorMessage = "Password must be at least 8 characters long."
+                            } else if (passwordInput != confirmPasswordInput) {
+                                errorMessage = "Passwords do not match."
+                            } else if (certUri == null) {
+                                errorMessage = "Certificate of Operation upload is required."
                             } else if (!Patterns.EMAIL_ADDRESS.matcher(emailInput.trim()).matches()) {
-                                Log.d("HAKOT_SUBMIT_UI", "Validation failed: invalid email format.")
-                                errorMessage = "Please enter a valid email address."
+                                errorMessage = "Please enter a valid administrator email address."
                             } else {
                                 isSubmitting = true
                                 errorMessage = null
                                 scope.launch {
-                                    Log.d("HAKOT_SUBMIT_UI", "Preparing to submit account application for requested role: ${requestedRole.name}")
-                                    val result = HakotRepository.submitAccountApplication(
-                                        fullName = fullNameInput.trim(),
-                                        email = emailInput.trim(),
-                                        contactNumber = contactInput.trim(),
-                                        municipalityId = HakotRepository.activeOrganization.municipalityId,
-                                        officeDepartment = officeInput.trim(),
-                                        officialPosition = positionInput.trim(),
-                                        requestedRole = requestedRole,
-                                        companyName = companyNameInput
-                                    )
-                                    Log.d("HAKOT_SUBMIT_UI", "Received submission result: success=${result.first}, message=${result.second}")
-                                    isSubmitting = false
-                                    if (result.first) {
-                                        isSubmitted = true
-                                    } else {
-                                        errorMessage = result.second
+                                    try {
+                                        val inputStream = context.contentResolver.openInputStream(certUri!!)
+                                        val bytes = inputStream?.readBytes()
+                                        inputStream?.close()
+
+                                        if (bytes == null || bytes.isEmpty()) {
+                                            isSubmitting = false
+                                            errorMessage = "Failed to read certificate file."
+                                            return@launch
+                                        }
+
+                                        if (bytes.size > 5 * 1024 * 1024) {
+                                            isSubmitting = false
+                                            errorMessage = "Certificate file size exceeds 5MB limit."
+                                            return@launch
+                                        }
+
+                                        val fileName = certFileName ?: "certificate.pdf"
+                                        val ext = fileName.substringAfterLast('.', "").lowercase()
+                                        val detectedMime = context.contentResolver.getType(certUri!!)
+
+                                        val mimeType = when {
+                                            ext == "pdf" -> "application/pdf"
+                                            ext == "png" -> "image/png"
+                                            ext == "jpg" || ext == "jpeg" -> "image/jpeg"
+                                            !detectedMime.isNullOrBlank() && detectedMime != "application/octet-stream" -> detectedMime
+                                            else -> "application/octet-stream"
+                                        }
+
+                                        val first16Hex = bytes.take(16).joinToString(" ") { String.format("%02X", it) }
+                                        Log.d("HAKOT_PDF_INSPECT", "URI: $certUri | Name: $fileName | Resolved MIME: $mimeType | ContentResolver MIME: $detectedMime | Size: ${bytes.size} bytes | Header Hex: $first16Hex")
+
+                                        val token = HakotRepository.getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+                                        val uploadRes = SupabaseClient.uploadCertificate(bytes, fileName, mimeType, token)
+                                        if (!uploadRes.first) {
+                                            isSubmitting = false
+                                            errorMessage = "Certificate upload failed: ${uploadRes.second}"
+                                            return@launch
+                                        }
+
+                                        val certPath = uploadRes.second
+
+                                        val result = HakotRepository.submitAccountApplication(
+                                            fullName = fullNameInput.trim(),
+                                            email = emailInput.trim(),
+                                            contactNumber = contactInput.trim(),
+                                            municipalityId = HakotRepository.activeOrganization.municipalityId,
+                                            officeDepartment = officeInput.trim(),
+                                            organizationName = orgNameInput.trim(),
+                                            organizationType = orgTypeInput,
+                                            certificatePath = certPath,
+                                            password = passwordInput
+                                        )
+
+                                        isSubmitting = false
+                                        if (result.first) {
+                                            isSubmitted = true
+                                        } else {
+                                            errorMessage = result.second
+                                        }
+                                    } catch (e: Exception) {
+                                        isSubmitting = false
+                                        errorMessage = "Submission exception: ${e.message}"
                                     }
                                 }
                             }
@@ -2388,8 +2820,284 @@ fun AccountRegistrationScreen(
                         if (isSubmitting) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.Black, strokeWidth = 2.5.dp)
                         } else {
-                            Text("SUBMIT ACCOUNT APPLICATION", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("SUBMIT ORGANIZATION APPLICATION", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AccountActivationScreen(
+    onBackToLogin: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var emailInput by remember { mutableStateOf("") }
+    var codeInput by remember { mutableStateOf("") }
+    var isCodeVerified by remember { mutableStateOf(false) }
+    var newPasswordInput by remember { mutableStateOf("") }
+    var confirmPasswordInput by remember { mutableStateOf("") }
+    var isNewPasswordVisible by remember { mutableStateOf(false) }
+    var isConfirmPasswordVisible by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var successMessage by remember { mutableStateOf<String?>(null) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DarkBackground),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .border(1.dp, DarkBorder, RoundedCornerShape(22.dp))
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    TextButton(onClick = onBackToLogin) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = EcoGreenLight, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("← Back to Login", fontSize = 11.sp, color = EcoGreenLight)
+                    }
+                }
+
+                DumpTruckLogo()
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "ACTIVATE HAKOT ACCOUNT",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = EcoGreenLight
+                )
+                Text(
+                    text = "Enter your approved email and the activation code sent to your inbox.",
+                    fontSize = 11.sp,
+                    color = TextOnDarkSecondary,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = emailInput,
+                    onValueChange = { emailInput = it; errorMessage = null },
+                    label = { Text("Registered Email Address") },
+                    leadingIcon = { Icon(imageVector = Icons.Default.Mail, contentDescription = "Email", tint = TextOnDarkSecondary) },
+                    singleLine = true,
+                    enabled = !isCodeVerified,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = EcoGreenPrimary,
+                        unfocusedBorderColor = DarkBorder,
+                        focusedTextColor = TextOnDarkPrimary,
+                        unfocusedTextColor = TextOnDarkPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = codeInput,
+                    onValueChange = { codeInput = it; errorMessage = null },
+                    label = { Text("Activation Code (6 digits)") },
+                    leadingIcon = { Icon(imageVector = Icons.Default.Key, contentDescription = "Code", tint = TextOnDarkSecondary) },
+                    singleLine = true,
+                    enabled = !isCodeVerified,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = EcoGreenPrimary,
+                        unfocusedBorderColor = DarkBorder,
+                        focusedTextColor = TextOnDarkPrimary,
+                        unfocusedTextColor = TextOnDarkPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = {
+                        if (emailInput.isNotBlank()) {
+                            scope.launch {
+                                isLoading = true
+                                errorMessage = null
+                                val (success, msg) = HakotRepository.resendActivationCode(emailInput)
+                                isLoading = false
+                                if (success) {
+                                    Toast.makeText(context, "New activation code sent to email.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    errorMessage = msg
+                                }
+                            }
+                        } else {
+                            errorMessage = "Please enter your email address to resend code."
+                        }
+                    }) {
+                        Text("Resend Code", fontSize = 11.sp, color = EcoGreenLight)
+                    }
+
+                    if (!isCodeVerified) {
+                        Button(
+                            onClick = {
+                                if (emailInput.isNotBlank() && codeInput.isNotBlank()) {
+                                    scope.launch {
+                                        isLoading = true
+                                        errorMessage = null
+                                        val (success, msg) = HakotRepository.verifyActivationCode(emailInput, codeInput)
+                                        isLoading = false
+                                        if (success) {
+                                            isCodeVerified = true
+                                            Toast.makeText(context, "Code verified! Please set your password.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            errorMessage = msg
+                                        }
+                                    }
+                                } else {
+                                    errorMessage = "Please enter both email and code."
+                                }
+                            },
+                            enabled = !isLoading,
+                            colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
+                            } else {
+                                Text("Verify Code", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                if (isCodeVerified) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text("Code Verified Successfully. Set Your Password:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = newPasswordInput,
+                        onValueChange = { newPasswordInput = it; errorMessage = null },
+                        label = { Text("New Password (min 6 chars)") },
+                        leadingIcon = { Icon(imageVector = Icons.Default.Lock, contentDescription = "Password", tint = TextOnDarkSecondary) },
+                        trailingIcon = {
+                            IconButton(onClick = { isNewPasswordVisible = !isNewPasswordVisible }) {
+                                Icon(
+                                    imageVector = if (isNewPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Password",
+                                    tint = TextOnDarkSecondary
+                                )
+                            }
+                        },
+                        visualTransformation = if (isNewPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = confirmPasswordInput,
+                        onValueChange = { confirmPasswordInput = it; errorMessage = null },
+                        label = { Text("Confirm New Password") },
+                        leadingIcon = { Icon(imageVector = Icons.Default.Lock, contentDescription = "Confirm Password", tint = TextOnDarkSecondary) },
+                        trailingIcon = {
+                            IconButton(onClick = { isConfirmPasswordVisible = !isConfirmPasswordVisible }) {
+                                Icon(
+                                    imageVector = if (isConfirmPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Password",
+                                    tint = TextOnDarkSecondary
+                                )
+                            }
+                        },
+                        visualTransformation = if (isConfirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = {
+                            if (newPasswordInput.length >= 6 && newPasswordInput == confirmPasswordInput) {
+                                scope.launch {
+                                    isLoading = true
+                                    errorMessage = null
+                                    val (success, msg) = HakotRepository.activateAccountWithPassword(emailInput, codeInput, newPasswordInput)
+                                    isLoading = false
+                                    if (success) {
+                                        successMessage = "Account activated successfully! You can now sign in."
+                                        Toast.makeText(context, "Account activated successfully!", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        errorMessage = msg
+                                    }
+                                }
+                            } else if (newPasswordInput.length < 6) {
+                                errorMessage = "Password must be at least 6 characters long."
+                            } else {
+                                errorMessage = "Passwords do not match."
+                            }
+                        },
+                        enabled = !isLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = RecycleYellow),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.Black, strokeWidth = 2.dp)
+                        } else {
+                            Text("Set Password & Activate", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+                    }
+                }
+
+                errorMessage?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(it, color = HazardousRed, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+                }
+
+                successMessage?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(it, color = EcoGreenLight, fontSize = 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = onBackToLogin,
+                        colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().height(44.dp)
+                    ) {
+                        Text("Proceed to Login", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
             }

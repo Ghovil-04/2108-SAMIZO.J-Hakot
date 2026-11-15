@@ -1,5 +1,6 @@
 package com.example.hakot.data
 
+import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -251,13 +252,37 @@ object SupabaseClient {
                             return@withContext FetchProfileResult(profileObj, false, code)
                         }
                     }
-                    return@withContext FetchProfileResult(null, true, code)
-                } else {
-                    val errText = readErrorStream(connection)
-                    Log.e("HAKOT_AUTH", "fetchProfile failed with HTTP $code: $errText")
-                    val isPermanent = code in 401..403
-                    return@withContext FetchProfileResult(null, isPermanent, code)
                 }
+                connection.disconnect()
+
+                // Fallback to GET_PROFILE Edge Function
+                var edgeConn: HttpURLConnection? = null
+                try {
+                    val edgeUrl = "$SUPABASE_URL/functions/v1/manage-account-applications"
+                    edgeConn = (URL(edgeUrl).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        setRequestProperty("apikey", SUPABASE_ANON_KEY)
+                        setRequestProperty("Authorization", "Bearer $accessToken")
+                        setRequestProperty("Content-Type", "application/json")
+                        doOutput = true
+                        connectTimeout = 5000
+                        readTimeout = 5000
+                    }
+                    val payload = JSONObject().apply { put("action", "GET_PROFILE") }
+                    edgeConn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                    val edgeCode = edgeConn.responseCode
+                    if (edgeCode in 200..299) {
+                        val edgeText = edgeConn.inputStream.bufferedReader().use { it.readText() }
+                        val root = JSONObject(edgeText)
+                        val prof = root.optJSONObject("profile")
+                        if (prof != null) {
+                            return@withContext FetchProfileResult(prof, false, 200)
+                        }
+                    }
+                } catch (_: Exception) {}
+                finally { edgeConn?.disconnect() }
+
+                return@withContext FetchProfileResult(null, true, code)
             } catch (e: Exception) {
                 Log.e("HAKOT_AUTH", "fetchProfile exception: ${e.message}")
                 return@withContext FetchProfileResult(null, false, -1)
@@ -632,9 +657,16 @@ object SupabaseClient {
             }
 
             val responseCode = connection.responseCode
+            val jsonText = try {
+                if (responseCode in 200..299) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    readErrorStream(connection)
+                }
+            } catch (_: Exception) { "" }
+
             if (responseCode in 200..299) {
-                val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
-                val rootObj = JSONObject(jsonText)
+                val rootObj = try { JSONObject(jsonText) } catch (_: Exception) { JSONObject() }
                 val dataArray = rootObj.optJSONArray("data")
                 SupabaseFetchResult(
                     isSuccess = true,
@@ -643,12 +675,12 @@ object SupabaseClient {
                     errorMessage = null
                 )
             } else {
-                val errorText = readErrorStream(connection)
+                val errMsg = try { JSONObject(jsonText).optString("error") } catch (_: Exception) { jsonText }
                 SupabaseFetchResult(
                     isSuccess = false,
                     statusCode = responseCode,
                     data = null,
-                    errorMessage = "HTTP $responseCode: $errorText"
+                    errorMessage = errMsg.ifBlank { "HTTP $responseCode" }
                 )
             }
         } catch (e: Exception) {
@@ -662,6 +694,129 @@ object SupabaseClient {
             connection?.disconnect()
         }
     }
+
+    suspend fun uploadCertificate(
+        fileBytes: ByteArray,
+        fileName: String,
+        mimeType: String,
+        accessToken: String = ""
+    ): Pair<Boolean, String> =
+        withContext(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
+            try {
+                val tokenToUse = if (accessToken.isNotBlank() && accessToken != SUPABASE_ANON_KEY) accessToken else SUPABASE_ANON_KEY
+                val base64Data = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
+                val payload = JSONObject().apply {
+                    put("action", "UPLOAD_CERTIFICATE")
+                    put("fileName", fileName)
+                    put("mimeType", mimeType)
+                    put("fileBase64", base64Data)
+                }
+
+                val urlString = "$SUPABASE_URL/functions/v1/manage-account-applications"
+                connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("apikey", SUPABASE_ANON_KEY)
+                    setRequestProperty("Authorization", "Bearer $tokenToUse")
+                    setRequestProperty("Content-Type", "application/json")
+                    doOutput = true
+                    connectTimeout = 20000
+                    readTimeout = 20000
+                }
+
+                connection.outputStream.use { output ->
+                    output.write(payload.toString().toByteArray(Charsets.UTF_8))
+                }
+
+                val responseCode = connection.responseCode
+                val responseText = try {
+                    if (responseCode in 200..299) {
+                        connection.inputStream.bufferedReader().use { it.readText() }
+                    } else {
+                        readErrorStream(connection)
+                    }
+                } catch (_: Exception) { "" }
+
+                if (responseCode in 200..299) {
+                    val root = try { JSONObject(responseText) } catch (_: Exception) { JSONObject() }
+                    val certPath = root.optString("certificatePath", "")
+                    if (certPath.isNotBlank()) {
+                        Pair(true, certPath)
+                    } else {
+                        val err = root.optString("error", "Unknown Edge Function upload error")
+                        Pair(false, "Upload stage [Edge Function]: $err")
+                    }
+                } else {
+                    val errJson = try { JSONObject(responseText) } catch (_: Exception) { JSONObject() }
+                    val errMsg = errJson.optString("error").ifBlank { responseText }
+                    val detailedErr = "Edge Function POST /manage-account-applications failed: HTTP $responseCode - $errMsg"
+                    Log.e("HAKOT_STORAGE", detailedErr)
+                    Pair(false, detailedErr)
+                }
+            } catch (e: Exception) {
+                val detailedErr = "Storage upload exception: ${e.message ?: "Unknown error"}"
+                Log.e("HAKOT_STORAGE", detailedErr)
+                Pair(false, detailedErr)
+            } finally {
+                connection?.disconnect()
+            }
+        }
+
+    suspend fun invokeActivationEdgeFunction(payload: JSONObject): SupabaseFetchResult =
+        withContext(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
+            try {
+                val urlString = "$SUPABASE_URL/functions/v1/manage-account-applications"
+                connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("apikey", SUPABASE_ANON_KEY)
+                    setRequestProperty("Content-Type", "application/json")
+                    doOutput = true
+                    connectTimeout = 10000
+                    readTimeout = 10000
+                }
+
+                connection.outputStream.use { output ->
+                    output.write(payload.toString().toByteArray(Charsets.UTF_8))
+                }
+
+                val responseCode = connection.responseCode
+                val jsonText = try {
+                    if (responseCode in 200..299) {
+                        connection.inputStream.bufferedReader().use { it.readText() }
+                    } else {
+                        readErrorStream(connection)
+                    }
+                } catch (_: Exception) { "" }
+
+                if (responseCode in 200..299) {
+                    val rootObj = try { JSONObject(jsonText) } catch (_: Exception) { JSONObject() }
+                    SupabaseFetchResult(
+                        isSuccess = true,
+                        statusCode = responseCode,
+                        data = rootObj.optJSONArray("data") ?: JSONArray(),
+                        errorMessage = rootObj.optString("error").let { if (it.isBlank()) null else it }
+                    )
+                } else {
+                    val errMsg = try { JSONObject(jsonText).optString("error") } catch (_: Exception) { jsonText }
+                    SupabaseFetchResult(
+                        isSuccess = false,
+                        statusCode = responseCode,
+                        data = null,
+                        errorMessage = errMsg.ifBlank { "HTTP $responseCode" }
+                    )
+                }
+            } catch (e: Exception) {
+                SupabaseFetchResult(
+                    isSuccess = false,
+                    statusCode = -1,
+                    data = null,
+                    errorMessage = e.message ?: "Activation network exception"
+                )
+            } finally {
+                connection?.disconnect()
+            }
+        }
 
     // ---------------------------------------------------------
     // FETCH NASUGBU GIS GEOJSON (Public RPC)
@@ -712,5 +867,31 @@ object SupabaseClient {
             } finally {
                 connection?.disconnect()
             }
+        }
+
+    suspend fun fetchVerifiedRecord(userId: String, accessToken: String): JSONObject? =
+        withContext(Dispatchers.IO) {
+            if (userId.isBlank() || accessToken.isBlank() || !isValidUuid(userId)) return@withContext null
+            var connection: HttpURLConnection? = null
+            try {
+                val urlString = "$SUPABASE_URL/rest/v1/verifieds?auth_user_id=eq.$userId&select=*"
+                connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    setRequestProperty("apikey", SUPABASE_ANON_KEY)
+                    setRequestProperty("Authorization", "Bearer $accessToken")
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }
+                val code = connection.responseCode
+                if (code in 200..299) {
+                    val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                    val arr = JSONArray(jsonText)
+                    if (arr.length() == 1) {
+                        return@withContext arr.getJSONObject(0)
+                    }
+                }
+            } catch (_: Exception) {}
+            finally { connection?.disconnect() }
+            return@withContext null
         }
 }

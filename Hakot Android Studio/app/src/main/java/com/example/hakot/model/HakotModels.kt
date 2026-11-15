@@ -371,6 +371,9 @@ data class AccountApplication(
     val municipality: String,
     val officeDepartment: String,
     val officialPosition: String,
+    val organizationName: String = "",
+    val organizationType: String = "Government / Municipal Office",
+    val certificatePath: String = "",
     val requestedRole: UserRole, // MUNICIPAL_ADMIN, MUNICIPAL_STAFF, DRIVER (Never SYSTEM_OWNER)
     var status: ApplicationStatus = ApplicationStatus.PENDING,
     val createdAtMillis: Long = System.currentTimeMillis()
