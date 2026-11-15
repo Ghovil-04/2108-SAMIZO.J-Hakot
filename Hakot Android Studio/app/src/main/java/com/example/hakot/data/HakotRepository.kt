@@ -30,6 +30,7 @@ import com.example.hakot.model.UserRole
 import com.example.hakot.model.WasteCategory
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
 import java.time.LocalDate
@@ -199,6 +200,30 @@ object HakotRepository {
             scheduledTimeWindow = "8:00 AM - 11:30 AM",
             scheduledDate = "Today",
             destinationDumpsite = "Nasugbu MRF Facility"
+        ),
+        CollectionRoute(
+            id = "sample_route_brgy_6_8",
+            routeName = "Barangay 6–8 Collection Sample Route",
+            barangaysCovered = "Barangay 6, 7 & 8 (P. Hugo → Villaviray → R. Martinez)",
+            colorHex = 0xFF3B82F6,
+            street = listOf(
+                "P. Hugo St (Start - Brgy 6)",
+                "Villaviray St (Stop 1 - Brgy 6)",
+                "R. Martinez St (Stop 2 - Brgy 6)",
+                "R. Martinez St (Stop 3 - Brgy 7)",
+                "R. Martinez St (Destination - Brgy 8)"
+            ),
+            geoPoints = listOf(
+                Pair(14.069532755225188, 120.63773826681394), // 1. START - P. Hugo St, Brgy 6
+                Pair(14.06954961585416, 120.6370807439308),   // 2. STOP 1 - Villaviray St, Brgy 6
+                Pair(14.067305016344275, 120.63759730840019), // 3. STOP 2 - R. Martinez St, Brgy 6
+                Pair(14.067290302628608, 120.63596103481797), // 4. STOP 3 - R. Martinez St, Brgy 7
+                Pair(14.067303284450917, 120.63394656667127)  // 5. DESTINATION - R. Martinez St, Brgy 8
+            ),
+            assignedTruckPlate = "ABK-8891",
+            scheduledTimeWindow = "8:00 AM - 11:30 AM",
+            scheduledDate = "Today",
+            destinationDumpsite = "Nasugbu MRF Facility"
         )
     )
 
@@ -210,21 +235,7 @@ object HakotRepository {
     }
 
     private fun generateDefaultSchedules() {
-        val currDate = LocalDate.now()
         schedules.clear()
-        schedules.add(
-            ScheduleItem(
-                id = "sch_1",
-                barangay = "C. Alvarez St → J.P. Laurel St → F. Alix St",
-                routeName = "C. Alvarez to F. Alix Street Corridor",
-                date = currDate,
-                startTime = LocalTime.of(8, 0),
-                endTime = LocalTime.of(11, 30),
-                wasteCategory = WasteCategory.GENERAL_WASTE,
-                truckAssigned = "Hakot Truck #1 (ABK-8891)",
-                status = "On Track"
-            )
-        )
     }
 
     suspend fun getValidAccessToken(context: Context): String? = refreshMutex.withLock {
@@ -996,7 +1007,108 @@ object HakotRepository {
         routes.add(route)
     }
 
+    suspend fun saveRouteToSupabase(route: CollectionRoute, context: Context): Pair<Boolean, String> {
+        if (!routes.any { it.id == route.id }) {
+            routes.add(route)
+        }
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val payload = JSONObject().apply {
+            put("id", route.id)
+            put("route_name", route.routeName)
+            put("municipality_id", activeOrganization.municipalityId)
+            put("barangays_covered", route.barangaysCovered)
+        }
+        val res = SupabaseClient.insertAuthenticatedTableRecord("routes", payload, token)
+        return Pair(res.isSuccess, res.errorMessage ?: "Saved")
+    }
+
     fun removeRoute(id: String) {
         routes.removeIf { it.id == id }
+    }
+
+    suspend fun saveScheduledRouteToSupabase(schedule: ScheduleItem, context: Context): Pair<Boolean, String> {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val payload = JSONObject().apply {
+            put("id", schedule.id)
+            put("route_name", schedule.routeName)
+            put("barangay", schedule.barangay)
+            put("municipality_id", activeOrganization.municipalityId)
+            put("collection_date", schedule.date.toString())
+            put("start_time", schedule.startTime.toString())
+            put("end_time", schedule.endTime.toString())
+            put("truck_assigned", schedule.truckAssigned)
+            put("status", schedule.status)
+            put("is_weekly_repeat", schedule.isWeeklyRepeat)
+            put("recurrence_end_date", schedule.recurrenceEndDate?.toString())
+            put("is_disabled", schedule.isDisabled)
+        }
+
+        if (!schedules.any { it.id == schedule.id }) {
+            schedules.add(schedule)
+        }
+
+        val res = SupabaseClient.insertAuthenticatedTableRecord("scheduled_routes", payload, token)
+        if (res.isSuccess) {
+            return Pair(true, "Scheduled route successfully saved to Supabase table 'scheduled_routes'.")
+        } else {
+            val resFallback = SupabaseClient.insertAuthenticatedTableRecord("schedules", payload, token)
+            if (resFallback.isSuccess) {
+                return Pair(true, "Scheduled route successfully saved to Supabase table 'schedules'.")
+            } else {
+                return Pair(false, "Supabase Error: ${res.errorMessage ?: resFallback.errorMessage}")
+            }
+        }
+    }
+
+    suspend fun updateScheduleInSupabase(schedule: ScheduleItem, context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val payload = JSONObject().apply {
+            put("is_disabled", schedule.isDisabled)
+            put("status", schedule.status)
+        }
+        val res = SupabaseClient.updateAuthenticatedTableRecord("schedules", "id=eq.${schedule.id}", payload, token)
+        return res.isSuccess
+    }
+
+    suspend fun fetchSchedulesFromSupabase(context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        var fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("scheduled_routes", token)
+        if (!fetchRes.isSuccess || fetchRes.data == null || fetchRes.data.length() == 0) {
+            fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("schedules", token)
+        }
+        if (fetchRes.isSuccess && fetchRes.data != null) {
+            try {
+                val array = fetchRes.data
+                val list = mutableListOf<ScheduleItem>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    list.add(
+                        ScheduleItem(
+                            id = obj.optString("id", "sch_$i"),
+                            barangay = obj.optString("barangay", "Nasugbu Scope"),
+                            routeName = obj.optString("route_name", "Collection Route"),
+                            date = LocalDate.parse(obj.optString("collection_date", LocalDate.now().toString())),
+                            startTime = LocalTime.parse(obj.optString("start_time", "08:00")),
+                            endTime = LocalTime.parse(obj.optString("end_time", "11:30")),
+                            wasteCategory = WasteCategory.GENERAL_WASTE,
+                            truckAssigned = obj.optString("truck_assigned", "ABK-8891"),
+                            status = obj.optString("status", "Scheduled"),
+                            isWeeklyRepeat = obj.optBoolean("is_weekly_repeat", false),
+                            recurrenceEndDate = if (obj.has("recurrence_end_date") && !obj.isNull("recurrence_end_date")) LocalDate.parse(obj.getString("recurrence_end_date")) else null,
+                            isDisabled = obj.optBoolean("is_disabled", false)
+                        )
+                    )
+                }
+                for (item in list) {
+                    if (!schedules.any { it.id == item.id }) {
+                        schedules.add(item)
+                    }
+                }
+                return true
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return false
     }
 }

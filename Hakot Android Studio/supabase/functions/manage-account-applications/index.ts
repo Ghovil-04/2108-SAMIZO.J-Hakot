@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const PUBLIC_ACTIONS = ['VERIFY_ACTIVATION_CODE', 'RESEND_ACTIVATION_CODE', 'ACTIVATE_ACCOUNT_PASSWORD', 'UPLOAD_CERTIFICATE', 'REGISTER_ORGANIZATION', 'GET_PROFILE']
+const PUBLIC_ACTIONS = ['VERIFY_ACTIVATION_CODE', 'RESEND_ACTIVATION_CODE', 'ACTIVATE_ACCOUNT_PASSWORD', 'UPLOAD_CERTIFICATE', 'REGISTER_ORGANIZATION', 'GET_PROFILE', 'GET_CLIPPED_ROADS', 'CHECK_TABLES']
 
 async function sendActivationEmail(email: string, fullName: string, code: string) {
   const resendApiKey = Deno.env.get('RESEND_API_KEY')
@@ -245,6 +245,18 @@ serve(async (req) => {
       }
     }
 
+    if (action === 'CHECK_TABLES') {
+      const { data, error } = await supabaseAdmin.rpc('exec_sql', { sql: `
+        SELECT table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public';
+      ` })
+      return new Response(JSON.stringify({ data, error }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (action === 'GET_PROFILE') {
       const authHeader = req.headers.get('Authorization')
       if (!authHeader) {
@@ -315,6 +327,77 @@ serve(async (req) => {
         .maybeSingle()
 
       return new Response(JSON.stringify({ data }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (action === 'GET_CLIPPED_ROADS') {
+      const { barangay_id, barangay_name } = body
+
+      if (!barangay_id && !barangay_name) {
+        return new Response(JSON.stringify({ error: 'Missing barangay_id or barangay_name' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      let bgyId = barangay_id
+      if (!bgyId && barangay_name) {
+        const { data: bgyData } = await supabaseAdmin
+          .from('barangays')
+          .select('id')
+          .ilike('name', barangay_name)
+          .maybeSingle()
+        bgyId = bgyData?.id
+      }
+
+      if (!bgyId) {
+        return new Response(JSON.stringify({ error: 'Barangay not found' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      let { data: clippedRoads, error: rpcErr } = await supabaseAdmin.rpc('get_clipped_roads_for_bgy', { bgy_id: bgyId })
+
+      if (rpcErr) {
+        try {
+          await supabaseAdmin.rpc('exec_sql', { sql: `
+            CREATE OR REPLACE FUNCTION public.get_clipped_roads_for_bgy(bgy_id uuid)
+            RETURNS TABLE (
+                segment_id uuid,
+                street_id uuid,
+                segment_name text,
+                road_type text,
+                osm_way_id bigint,
+                clipped_geojson json
+            ) AS $$
+            BEGIN
+                RETURN QUERY
+                SELECT
+                    s.id AS segment_id,
+                    s.street_id,
+                    COALESCE(NULLIF(s.segment_name, ''), st.name, 'Unnamed road · ' || INITCAP(s.road_type)) AS segment_name,
+                    s.road_type,
+                    s.osm_way_id,
+                    ST_AsGeoJSON(ST_Intersection(s.geometry, b.boundary))::JSON AS clipped_geojson
+                FROM public.street_segments s
+                LEFT JOIN public.streets st ON s.street_id = st.id
+                JOIN public.barangays b ON b.id = bgy_id
+                WHERE ST_Intersects(s.geometry, b.boundary)
+                  AND NOT ST_IsEmpty(ST_Intersection(s.geometry, b.boundary));
+            END;
+            $$ LANGUAGE plpgsql STABLE;
+          ` })
+        } catch (_: any) {}
+
+        const retryRes = await supabaseAdmin.rpc('get_clipped_roads_for_bgy', { bgy_id: bgyId })
+        clippedRoads = retryRes.data
+        rpcErr = retryRes.error
+      }
+
+      return new Response(JSON.stringify({ data: clippedRoads, error: rpcErr?.message }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })

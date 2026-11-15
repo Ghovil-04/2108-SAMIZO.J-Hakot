@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.hakot.data.HakotRepository
+import com.example.hakot.data.GisRoadSegmentFeature
 import com.example.hakot.data.OsrmRoutingHelper
 import com.example.hakot.ui.theme.DarkSurfaceCard
 import com.example.hakot.ui.theme.TextOnDarkPrimary
@@ -53,7 +54,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.style.layers.LineLayer
@@ -82,7 +85,11 @@ fun DarkMapView(
     modifier: Modifier = Modifier,
     searchQuery: String = "",
     onReportClick: () -> Unit = {},
-    onMapInteractionStateChange: (isInteracting: Boolean) -> Unit = {}
+    onMapInteractionStateChange: (isInteracting: Boolean) -> Unit = {},
+    customRoutePoints: List<GeoPoint> = emptyList(),
+    onMapClick: ((LatLng) -> Unit)? = null,
+    barangayRoads: List<GisRoadSegmentFeature> = emptyList(),
+    selectedRoadIds: List<String> = emptyList()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -104,26 +111,35 @@ fun DarkMapView(
     val mapView = remember { MapView(context) }
 
     // Fetch Date-Specific OSRM Road-Snapped Route asynchronously when selectedMapDate changes
-    LaunchedEffect(HakotRepository.selectedMapDate) {
-        val selectedDate = HakotRepository.selectedMapDate
-        val scheduleForDate = HakotRepository.schedules.find { it.date == selectedDate }
-
-        if (scheduleForDate != null) {
-            val matchedRoute = HakotRepository.routes.find { it.routeName == scheduleForDate.routeName }
-                ?: HakotRepository.routes.firstOrNull()
-
-            if (matchedRoute != null && matchedRoute.geoPoints.isNotEmpty()) {
-                val points = OsrmRoutingHelper.fetchRoadRoute(matchedRoute.geoPoints)
-                fetchedRoutePoints = points
-            } else {
-                fetchedRoutePoints = emptyList()
-            }
+    LaunchedEffect(HakotRepository.selectedMapDate, customRoutePoints, barangayRoads, selectedRoadIds) {
+        val pointsToRender = if (customRoutePoints.isNotEmpty()) {
+            customRoutePoints
         } else {
-            fetchedRoutePoints = emptyList()
-        }
+            val selectedDate = HakotRepository.selectedMapDate
+            val scheduleForDate = HakotRepository.schedules.find { it.date == selectedDate }
 
+            if (scheduleForDate != null) {
+                val matchedRoute = HakotRepository.routes.find { it.routeName == scheduleForDate.routeName }
+                    ?: HakotRepository.routes.firstOrNull()
+
+                if (matchedRoute != null && matchedRoute.geoPoints.isNotEmpty()) {
+                    OsrmRoutingHelper.fetchRoadRoute(matchedRoute.geoPoints)
+                } else {
+                    emptyList()
+                }
+            } else {
+                val defaultRoute = HakotRepository.routes.firstOrNull()
+                if (defaultRoute != null && defaultRoute.geoPoints.isNotEmpty()) {
+                    OsrmRoutingHelper.fetchRoadRoute(defaultRoute.geoPoints)
+                } else {
+                    emptyList()
+                }
+            }
+        }
+        fetchedRoutePoints = pointsToRender
         mapLibreMapInstance?.let { maplibreMap ->
             setupMapLibreRouteOverlay(maplibreMap, fetchedRoutePoints)
+            setupMapLibreRoadNetworkOverlay(maplibreMap, barangayRoads, selectedRoadIds)
         }
     }
 
@@ -142,6 +158,13 @@ fun DarkMapView(
                         maplibreMap.uiSettings.isTiltGesturesEnabled = true
                         maplibreMap.uiSettings.isDoubleTapGesturesEnabled = true
 
+                        if (onMapClick != null) {
+                            maplibreMap.addOnMapClickListener { latLng ->
+                                onMapClick(latLng)
+                                true
+                            }
+                        }
+
                         // Set OpenFreeMap Public Style
                         maplibreMap.setStyle("https://tiles.openfreemap.org/styles/bright") { _ ->
                             maplibreMap.cameraPosition = CameraPosition.Builder()
@@ -151,6 +174,7 @@ fun DarkMapView(
                                 .build()
 
                             setupMapLibreRouteOverlay(maplibreMap, fetchedRoutePoints)
+                            setupMapLibreRoadNetworkOverlay(maplibreMap, barangayRoads, selectedRoadIds)
                         }
 
                         // Touch listener to disallow parent intercept and hide search bar during map gestures
@@ -318,6 +342,79 @@ private fun setupMapLibreRouteOverlay(maplibreMap: MapLibreMap, points: List<Geo
                 )
             }
             style.addLayer(arrowLayer)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+private fun setupMapLibreRoadNetworkOverlay(
+    maplibreMap: MapLibreMap,
+    roads: List<GisRoadSegmentFeature>,
+    selectedIds: List<String>
+) {
+    val style = maplibreMap.style ?: return
+    val roadsSourceId = "barangay-roads-source"
+    val roadsLayerId = "barangay-roads-layer"
+    val selectedSourceId = "barangay-selected-source"
+    val selectedLayerId = "barangay-selected-layer"
+
+    try {
+        if (style.getLayer(selectedLayerId) != null) style.removeLayer(selectedLayerId)
+        if (style.getSource(selectedSourceId) != null) style.removeSource(selectedSourceId)
+        if (style.getLayer(roadsLayerId) != null) style.removeLayer(roadsLayerId)
+        if (style.getSource(roadsSourceId) != null) style.removeSource(roadsSourceId)
+
+        if (roads.isNotEmpty()) {
+            val unselectedFeatures = roads.filter { !selectedIds.contains(it.id) }.map { road ->
+                val line = LineString.fromLngLats(road.lineStringCoordinates.map { (lng, lat) -> Point.fromLngLat(lng, lat) })
+                Feature.fromGeometry(line).apply {
+                    addStringProperty("id", road.id)
+                    addStringProperty("name", road.segmentName)
+                }
+            }
+            if (unselectedFeatures.isNotEmpty()) {
+                style.addSource(GeoJsonSource(roadsSourceId, FeatureCollection.fromFeatures(unselectedFeatures)))
+                style.addLayer(LineLayer(roadsLayerId, roadsSourceId).apply {
+                    setProperties(
+                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#94A3B8")),
+                        PropertyFactory.lineWidth(4f),
+                        PropertyFactory.lineCap(Property.LINE_CAP_ROUND)
+                    )
+                })
+            }
+
+            val selectedFeatures = roads.filter { selectedIds.contains(it.id) }.map { road ->
+                val coords = if (road.clippedCoordinates.isNotEmpty()) road.clippedCoordinates else road.lineStringCoordinates
+                val line = LineString.fromLngLats(coords.map { (lng, lat) -> Point.fromLngLat(lng, lat) })
+                Feature.fromGeometry(line).apply {
+                    addStringProperty("id", road.id)
+                    addStringProperty("name", road.segmentName)
+                }
+            }
+            if (selectedFeatures.isNotEmpty()) {
+                style.addSource(GeoJsonSource(selectedSourceId, FeatureCollection.fromFeatures(selectedFeatures)))
+                style.addLayer(LineLayer(selectedLayerId, selectedSourceId).apply {
+                    setProperties(
+                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#3B82F6")),
+                        PropertyFactory.lineWidth(8f),
+                        PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                        PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+                    )
+                })
+
+                try {
+                    val boundsBuilder = LatLngBounds.Builder()
+                    for (road in roads.filter { selectedIds.contains(it.id) }) {
+                        val coords = if (road.clippedCoordinates.isNotEmpty()) road.clippedCoordinates else road.lineStringCoordinates
+                        for (pt in coords) {
+                            boundsBuilder.include(LatLng(pt.second, pt.first))
+                        }
+                    }
+                    val bounds = boundsBuilder.build()
+                    maplibreMap.easeCamera(CameraUpdateFactory.newLatLngBounds(bounds, 120), 1000)
+                } catch (_: Exception) {}
+            }
         }
     } catch (e: Exception) {
         e.printStackTrace()

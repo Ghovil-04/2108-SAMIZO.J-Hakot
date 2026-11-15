@@ -328,7 +328,10 @@ data class ScheduleItem(
     val wasteCategory: WasteCategory,
     val truckAssigned: String,
     val status: String,
-    val barangayId: String = "brgy_041019001"
+    val barangayId: String = "brgy_041019001",
+    val isWeeklyRepeat: Boolean = false,
+    val recurrenceEndDate: LocalDate? = null,
+    val isDisabled: Boolean = false
 )
 
 data class ReportMessage(

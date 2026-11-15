@@ -615,6 +615,39 @@ object SupabaseClient {
         }
     }
 
+    suspend fun deleteTableRecord(
+        tableName: String,
+        queryFilter: String,
+        accessToken: String
+    ): SupabaseInsertResult = withContext(Dispatchers.IO) {
+        if (accessToken.isBlank()) {
+            return@withContext SupabaseInsertResult(false, 401, "Missing access token")
+        }
+        var connection: HttpURLConnection? = null
+        try {
+            val urlString = "$SUPABASE_URL/rest/v1/$tableName?$queryFilter"
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "DELETE"
+                setRequestProperty("apikey", SUPABASE_ANON_KEY)
+                setRequestProperty("Authorization", "Bearer $accessToken")
+                setRequestProperty("Prefer", "return=minimal")
+                connectTimeout = 5000
+                readTimeout = 5000
+            }
+            val code = connection.responseCode
+            if (code in 200..299) {
+                SupabaseInsertResult(true, code, null)
+            } else {
+                val err = readErrorStream(connection)
+                SupabaseInsertResult(false, code, "HTTP $code: $err")
+            }
+        } catch (e: Exception) {
+            SupabaseInsertResult(false, -1, e.message ?: "Unknown delete exception")
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
     // ---------------------------------------------------------
     // EXPLICIT EDGE FUNCTION INVOCATION (Requires user JWT)
     // ---------------------------------------------------------

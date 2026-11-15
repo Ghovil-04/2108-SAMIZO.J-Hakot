@@ -16,7 +16,19 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.LocalTime
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.example.hakot.ui.components.DarkMapView
 import com.example.hakot.model.Route
+import androidx.compose.material3.CircularProgressIndicator
+import com.example.hakot.model.ScheduleItem
+import com.example.hakot.model.WasteCategory
+import com.example.hakot.data.GisManager
+import com.example.hakot.data.GisRoadSegmentFeature
+import org.osmdroid.util.GeoPoint
+import androidx.compose.foundation.lazy.itemsIndexed
 import com.example.hakot.data.SupabaseClient
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -37,6 +49,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -141,6 +154,9 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
+import java.time.DayOfWeek
+import java.time.LocalDateTime
+import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 
@@ -190,8 +206,7 @@ fun AdminScreen(
                     "District Overview",
                     "Account Management",
                     "Account Applications",
-                    "Collection Routes",
-                    "Schedules",
+                    "Collection Schedule",
                     "Fleet Trucks",
                     "Citizen Reports",
                     "Audit History"
@@ -200,8 +215,7 @@ fun AdminScreen(
                 listOf(
                     "District Overview",
                     "Account Management",
-                    "Collection Routes",
-                    "Schedules",
+                    "Collection Schedule",
                     "Fleet Trucks",
                     "Citizen Reports",
                     "Audit History"
@@ -304,29 +318,24 @@ fun AdminScreen(
                         2 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             SystemOwnerApplicationsReviewView()
                         } else {
-                            AdminRoutesView()
+                            CollectionScheduleDashboardView()
                         }
                         3 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            AdminRoutesView()
-                        } else {
-                            AdminSchedulesView()
-                        }
-                        4 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            AdminSchedulesView()
+                            CollectionScheduleDashboardView()
                         } else {
                             AdminTrucksView()
                         }
-                        5 -> if (userRole == UserRole.SYSTEM_OWNER) {
+                        4 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             AdminTrucksView()
                         } else {
                             AdminReportsView()
                         }
-                        6 -> if (userRole == UserRole.SYSTEM_OWNER) {
+                        5 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             AdminReportsView()
                         } else {
                             AdminAuditLogsView()
                         }
-                        7 -> if (userRole == UserRole.SYSTEM_OWNER) {
+                        6 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             AdminAuditLogsView()
                         }
                     }
@@ -1949,43 +1958,507 @@ fun InvitationDetailsModal(
 
 @Composable
 fun AdminRoutesView() {
-    var showPlannerModal by remember { mutableStateOf(false) }
-    var editingRoute by remember { mutableStateOf<Route?>(null) }
-    val nasugbuBarangays = remember {
-        listOf(
-            "Barangay 1 (Town Proper)", "Barangay 2 (Town Proper)", "Barangay 3 (Town Proper)", "Barangay 4 (Town Proper)",
-            "Bucana", "Caluangan", "Kaylaway", "Wawa", "Looc", "Natipuan", "Papaya", "Balaytigue", "Pantalan"
-        )
+    CollectionScheduleDashboardView()
+}
+
+@Composable
+fun MapRoutePlannerScreen(
+    initialDate: LocalDate = LocalDate.now(),
+    onDismiss: () -> Unit,
+    onSaveScheduledRoute: (String, String, String, LocalDate, LocalTime, LocalTime, String, Boolean, LocalDate?, List<GisRoadSegmentFeature>) -> Unit
+) {
+    var isGisLoading by remember { mutableStateOf(!GisManager.isLoaded) }
+
+    LaunchedEffect(Unit) {
+        if (!GisManager.isLoaded) {
+            isGisLoading = true
+            GisManager.loadGisData()
+            isGisLoading = false
+        }
     }
-    val nasugbuStreets = remember {
-        listOf("J.P. Laurel St", "Rizal St", "Nasugbu-Ternate Highway", "Palico-Balayan Highway", "P. Roxas St", "Escalera St", "Mabini St")
+
+    val barangayList = remember(GisManager.barangays.size, isGisLoading) {
+        if (GisManager.barangays.isNotEmpty()) GisManager.barangays.map { it.name }
+        else listOf("Aga", "Bucana", "Caluangan", "Kaylaway", "Wawa", "Barangay 1", "Barangay 2", "Barangay 6")
     }
 
     var routeNameInput by remember { mutableStateOf("") }
-    var selectedBarangay by remember { mutableStateOf(nasugbuBarangays[0]) }
-    var selectedStreets by remember { mutableStateOf(listOf<String>()) }
+    var scheduleNameInput by remember { mutableStateOf("") }
+    var selectedBarangay by remember { mutableStateOf("Barangay 6") }
+    var selectedRoadSegmentIds by remember { mutableStateOf(listOf<String>()) }
+    var bgySearchQuery by remember { mutableStateOf("") }
+    var roadSearchQuery by remember { mutableStateOf("") }
+    var showReviewDialog by remember { mutableStateOf(false) }
+
+    var collectionDateInput by remember(initialDate) { mutableStateOf(initialDate.toString()) }
+    var startTimeInput by remember { mutableStateOf("08:00") }
+    var endTimeInput by remember { mutableStateOf("11:30") }
+    var assignedTruckInput by remember { mutableStateOf(HakotRepository.trucks.firstOrNull()?.let { "${it.plateNumber} (${it.truckCode})" } ?: "ABK-8891 (Dump Truck A)") }
+
+    val filteredBarangays = remember(bgySearchQuery, barangayList) {
+        if (bgySearchQuery.isBlank()) barangayList
+        else barangayList.filter { it.contains(bgySearchQuery, ignoreCase = true) }
+    }
+
+    val availableRoads = remember(selectedBarangay, GisManager.isLoaded, isGisLoading) {
+        GisManager.getRoadSegmentsInBarangay(selectedBarangay)
+    }
+
+    val filteredAvailableRoads = remember(roadSearchQuery, availableRoads) {
+        if (roadSearchQuery.isBlank()) availableRoads
+        else availableRoads.filter { it.segmentName.contains(roadSearchQuery, ignoreCase = true) || it.roadType.contains(roadSearchQuery, ignoreCase = true) }
+    }
+
+    val selectedGisSegments = selectedRoadSegmentIds.mapNotNull { id -> GisManager.roadSegments.find { it.id == id } }
+
+    val routeGeoPoints = remember(selectedGisSegments) {
+        selectedGisSegments.flatMap { seg -> seg.lineStringCoordinates.map { (lng, lat) -> GeoPoint(lat, lng) } }
+    }
+
+    if (isGisLoading && !GisManager.isLoaded) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DarkBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CircularProgressIndicator(color = EcoGreenPrimary)
+                Text("Loading 42 Nasugbu Barangays & 1,579 PostGIS Road Segments...", fontSize = 12.sp, color = TextOnDarkPrimary)
+            }
+        }
+    } else {
+        Box(modifier = Modifier.fillMaxSize().background(DarkBackground)) {
+            DarkMapView(
+                modifier = Modifier.fillMaxSize(),
+                customRoutePoints = routeGeoPoints,
+                barangayRoads = availableRoads,
+                selectedRoadIds = selectedRoadSegmentIds
+            )
+
+        // Top Toolbar
+        Surface(
+            color = DarkSurface,
+            modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+            border = BorderStroke(1.dp, DarkBorder)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkPrimary)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("PLAN NEW ROUTE", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    Text("$selectedBarangay • Selected roads: ${selectedGisSegments.size}", fontSize = 10.sp, color = TextOnDarkPrimary)
+                }
+                Button(
+                    onClick = {
+                        if (selectedGisSegments.isNotEmpty()) {
+                            showReviewDialog = true
+                        }
+                    },
+                    enabled = selectedGisSegments.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Finish Route", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Bottom Selection Panel with Searchable Barangay Chips & Available Roads Checklist
+        Surface(
+            color = DarkSurfaceCard,
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.60f)
+                .align(Alignment.BottomCenter),
+            shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+            border = BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("1. Select Barangay (${GisManager.barangays.size} Available):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    Text("Selected: ${selectedRoadSegmentIds.size} roads", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenPrimary)
+                }
+
+                OutlinedTextField(
+                    value = bgySearchQuery,
+                    onValueChange = { bgySearchQuery = it },
+                    label = { Text("Search barangay (e.g. Barangay 6, Aga)...") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = EcoGreenPrimary,
+                        unfocusedBorderColor = DarkBorder,
+                        focusedTextColor = TextOnDarkPrimary,
+                        unfocusedTextColor = TextOnDarkPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(40.dp)
+                ) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(filteredBarangays) { bgyName ->
+                            val isSelected = selectedBarangay == bgyName
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    if (selectedBarangay != bgyName) {
+                                        selectedBarangay = bgyName
+                                        selectedRoadSegmentIds = emptyList()
+                                    }
+                                },
+                                label = { Text(bgyName, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = EcoGreenContainer,
+                                    selectedLabelColor = EcoGreenLight,
+                                    containerColor = DarkSurface,
+                                    labelColor = TextOnDarkSecondary
+                                )
+                            )
+                        }
+                    }
+                }
+
+                Text("2. Available Roads in $selectedBarangay (${filteredAvailableRoads.size}):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+
+                OutlinedTextField(
+                    value = roadSearchQuery,
+                    onValueChange = { roadSearchQuery = it },
+                    label = { Text("Search streets in $selectedBarangay...") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = EcoGreenPrimary,
+                        unfocusedBorderColor = DarkBorder,
+                        focusedTextColor = TextOnDarkPrimary,
+                        unfocusedTextColor = TextOnDarkPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                        .padding(4.dp)
+                ) {
+                    if (filteredAvailableRoads.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No road segments found in $selectedBarangay.", fontSize = 11.sp, color = TextOnDarkSecondary)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            items(filteredAvailableRoads) { road ->
+                                val isChecked = selectedRoadSegmentIds.contains(road.id)
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = if (isChecked) EcoGreenContainer.copy(alpha = 0.4f) else DarkSurface),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedRoadSegmentIds = if (isChecked) selectedRoadSegmentIds - road.id else selectedRoadSegmentIds + road.id
+                                        }
+                                        .border(1.dp, if (isChecked) EcoGreenPrimary else DarkBorder, RoundedCornerShape(8.dp))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(road.segmentName, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                            Text("Type: ${road.roadType}", fontSize = 9.sp, color = TextOnDarkSecondary)
+                                        }
+                                        Checkbox(
+                                            checked = isChecked,
+                                            onCheckedChange = { checked ->
+                                                selectedRoadSegmentIds = if (checked) selectedRoadSegmentIds + road.id else selectedRoadSegmentIds - road.id
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showReviewDialog) {
+        var scheduleType by remember { mutableStateOf("SPECIFIC_DATE") }
+        var selectedDayOfWeek by remember { mutableStateOf(DayOfWeek.MONDAY) }
+        val daysOfWeekList = listOf(
+            DayOfWeek.MONDAY to "Monday",
+            DayOfWeek.TUESDAY to "Tuesday",
+            DayOfWeek.WEDNESDAY to "Wednesday",
+            DayOfWeek.THURSDAY to "Thursday",
+            DayOfWeek.FRIDAY to "Friday",
+            DayOfWeek.SATURDAY to "Saturday",
+            DayOfWeek.SUNDAY to "Sunday"
+        )
+        var repeatEndDate by remember { mutableStateOf(LocalDate.now().plusMonths(3).toString()) }
+
+        AlertDialog(
+            onDismissRequest = { showReviewDialog = false },
+            title = { Text("Route & Schedule Details (Database Save)", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = routeNameInput,
+                        onValueChange = { routeNameInput = it },
+                        label = { Text("Route & Schedule Name (Required)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Text("Barangay: $selectedBarangay (${selectedGisSegments.size} segments)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text("Schedule Frequency:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = scheduleType == "SPECIFIC_DATE", onClick = { scheduleType = "SPECIFIC_DATE" })
+                        Text("Specific Date", fontSize = 11.sp, color = TextOnDarkPrimary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        RadioButton(selected = scheduleType == "DAY_OF_WEEK", onClick = { scheduleType = "DAY_OF_WEEK" })
+                        Text("Day of Week (Weekly)", fontSize = 11.sp, color = TextOnDarkPrimary)
+                    }
+
+                    if (scheduleType == "SPECIFIC_DATE") {
+                        OutlinedTextField(
+                            value = collectionDateInput,
+                            onValueChange = { collectionDateInput = it },
+                            label = { Text("Collection Date (YYYY-MM-DD)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        Text("Select Day of Week:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkSecondary)
+                        Box(modifier = Modifier.fillMaxWidth().height(40.dp)) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                items(daysOfWeekList) { (dow, label) ->
+                                    FilterChip(
+                                        selected = selectedDayOfWeek == dow,
+                                        onClick = { selectedDayOfWeek = dow },
+                                        label = { Text(label.take(3), fontSize = 10.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight, containerColor = DarkSurface, labelColor = TextOnDarkSecondary)
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedTextField(
+                            value = repeatEndDate,
+                            onValueChange = { repeatEndDate = it },
+                            label = { Text("Recurrence End Date (YYYY-MM-DD)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = startTimeInput,
+                            onValueChange = { startTimeInput = it },
+                            label = { Text("Start Time (HH:MM)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = endTimeInput,
+                            onValueChange = { endTimeInput = it },
+                            label = { Text("End Time (HH:MM)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Text("Assigned Truck: $assignedTruckInput", fontSize = 11.sp, color = TextOnDarkSecondary)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (selectedGisSegments.isNotEmpty()) {
+                            if (routeNameInput.isBlank()) {
+                                routeNameInput = "$selectedBarangay Route"
+                            }
+                            scheduleNameInput = routeNameInput
+                            try {
+                                val start = LocalTime.parse(startTimeInput.trim())
+                                val end = LocalTime.parse(endTimeInput.trim())
+                                if (!end.isAfter(start)) return@Button
+
+                                val date: LocalDate = try {
+                                    LocalDate.parse(collectionDateInput.trim())
+                                } catch (_: Exception) {
+                                    LocalDate.now()
+                                }
+                                val repeatWeekly: Boolean = (scheduleType == "DAY_OF_WEEK")
+                                val endRecur: LocalDate? = if (repeatWeekly) {
+                                    try { LocalDate.parse(repeatEndDate.trim()) } catch (_: Exception) { date.plusMonths(3) }
+                                } else null
+
+                                onSaveScheduledRoute(
+                                    routeNameInput.trim(),
+                                    scheduleNameInput.trim(),
+                                    selectedBarangay,
+                                    date,
+                                    start,
+                                    end,
+                                    assignedTruckInput,
+                                    repeatWeekly,
+                                    endRecur,
+                                    selectedGisSegments
+                                )
+                                showReviewDialog = false
+                                onDismiss()
+                            } catch (e: Exception) {
+                                Log.e("HAKOT_PLANNER", "Save schedule error", e)
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Confirm and Save Schedule", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReviewDialog = false }) {
+                    Text("Back", color = TextOnDarkSecondary)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
+    }
+    }
+}
+
+
+
+@Composable
+fun CollectionScheduleDashboardView() {
+    val context = LocalContext.current
+    var showSchedulePlanner by remember { mutableStateOf(false) }
+    var selectedWeekStart by remember { mutableStateOf(LocalDate.now().with(DayOfWeek.MONDAY)) }
+    var selectedDay by remember { mutableStateOf(LocalDate.now()) }
     var successMsg by remember { mutableStateOf<String?>(null) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    LaunchedEffect(Unit) {
+        HakotRepository.fetchSchedulesFromSupabase(context)
+    }
+
+    val daysOfWeek = (0..6).map { selectedWeekStart.plusDays(it.toLong()) }
+    val now = LocalDateTime.now(ZoneId.of("Asia/Manila"))
+    val today = LocalDate.now(ZoneId.of("Asia/Manila"))
+
+    val schedulesForSelectedDay = HakotRepository.schedules.filter { sch ->
+        val match = !sch.isDisabled && (sch.date == selectedDay || sch.date.toString() == selectedDay.toString() || (sch.isWeeklyRepeat && !selectedDay.isBefore(sch.date) && (sch.recurrenceEndDate == null || !selectedDay.isAfter(sch.recurrenceEndDate)) && selectedDay.dayOfWeek == sch.date.dayOfWeek))
+        Log.d("HAKOT_DEBUG", "Checking schedule id=${sch.id} name=${sch.routeName} date=${sch.date} selectedDay=$selectedDay match=$match")
+        match
+    }
+
+    if (showSchedulePlanner) {
+        val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = DarkBackground
+        ) {
+            MapRoutePlannerScreen(
+                initialDate = selectedDay,
+                onDismiss = { showSchedulePlanner = false },
+                onSaveScheduledRoute = { routeName, scheduleName, barangayName, date, startTime, endTime, truck, repeatWeekly, repeatEnd, segments ->
+                    val streetNames = segments.map { it.segmentName }
+                    val newRoute = Route(
+                        routeName = routeName,
+                        street = streetNames,
+                        id = "rt_${System.currentTimeMillis()}",
+                        barangaysCovered = barangayName
+                    )
+
+                    val newSchedule = ScheduleItem(
+                        id = "sch_${System.currentTimeMillis()}",
+                        barangay = barangayName,
+                        routeName = routeName,
+                        date = date,
+                        startTime = startTime,
+                        endTime = endTime,
+                        wasteCategory = WasteCategory.GENERAL_WASTE,
+                        truckAssigned = truck,
+                        status = "Scheduled",
+                        isWeeklyRepeat = repeatWeekly,
+                        recurrenceEndDate = repeatEnd,
+                        isDisabled = false
+                    )
+
+                    HakotRepository.addSchedule(newSchedule)
+                    HakotRepository.addRoute(newRoute)
+
+                    selectedDay = date
+                    selectedWeekStart = date.with(DayOfWeek.MONDAY)
+
+                    scope.launch {
+                        HakotRepository.saveRouteToSupabase(newRoute, context)
+                        HakotRepository.saveScheduledRouteToSupabase(newSchedule, context)
+                    }
+
+                    successMsg = "Scheduled route '$routeName' ($barangayName) saved to table 'scheduled_routes' for $date ($startTime - $endTime)!"
+                    showSchedulePlanner = false
+                }
+            )
+        }
+    } else {
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Collection Routes & GIS Segments", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+            Column {
+                Text("Collection Schedule & Routes", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                Text("Nasugbu Municipality • Timezone: Asia/Manila", fontSize = 11.sp, color = TextOnDarkSecondary)
+            }
             Button(
-                onClick = {
-                    routeNameInput = ""
-                    selectedBarangay = nasugbuBarangays[0]
-                    selectedStreets = listOf(nasugbuStreets[0])
-                    editingRoute = null
-                    showPlannerModal = true
-                },
+                onClick = { showSchedulePlanner = true },
                 colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Text("+ Plan New Route", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("Plan a Schedule", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -2002,157 +2475,338 @@ fun AdminRoutesView() {
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(bottom = 20.dp)
+        // WEEKLY CALENDAR WIDGET
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
         ) {
-            items(HakotRepository.routes) { rt ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(rt.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                            TextButton(onClick = {
-                                routeNameInput = rt.routeName
-                                selectedStreets = rt.street
-                                editingRoute = rt
-                                showPlannerModal = true
-                            }) {
-                                Text("Edit Route", fontSize = 11.sp, color = EcoGreenLight)
-                            }
+                    TextButton(onClick = { selectedWeekStart = selectedWeekStart.minusWeeks(1) }) {
+                        Text("◀ Prev Week", fontSize = 11.sp, color = EcoGreenLight)
+                    }
+                    Text("Week of ${selectedWeekStart}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                    TextButton(onClick = { selectedWeekStart = selectedWeekStart.plusWeeks(1) }) {
+                        Text("Next Week ▶", fontSize = 11.sp, color = EcoGreenLight)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    daysOfWeek.forEach { day ->
+                        val isSelected = day == selectedDay
+                        val hasSchedules = HakotRepository.schedules.any { sch ->
+                            !sch.isDisabled && (sch.date == day || sch.date.toString() == day.toString() || (sch.isWeeklyRepeat && !day.isBefore(sch.date) && (sch.recurrenceEndDate == null || !day.isAfter(sch.recurrenceEndDate)) && day.dayOfWeek == sch.date.dayOfWeek))
                         }
-                        Text("📍 ${rt.barangaysCovered}", fontSize = 12.sp, color = EcoGreenLight)
-                        Text("Streets: ${rt.street.joinToString(", ")}", fontSize = 11.sp, color = TextOnDarkSecondary)
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) EcoGreenPrimary else if (hasSchedules) EcoGreenContainer else DarkSurface)
+                                .clickable { selectedDay = day }
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Text(day.dayOfWeek.name.take(3), fontSize = 10.sp, color = if (isSelected) Color.Black else TextOnDarkSecondary)
+                            Text("${day.dayOfMonth}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (isSelected) Color.Black else TextOnDarkPrimary)
+                        }
                     }
                 }
             }
         }
-    }
 
-    if (showPlannerModal) {
-        AlertDialog(
-            onDismissRequest = { showPlannerModal = false },
-            title = { Text(if (editingRoute == null) "Plan Map-Based Route" else "Edit Planned Route") },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = routeNameInput,
-                        onValueChange = { routeNameInput = it },
-                        label = { Text("Route Name (e.g. Zone 1 - Wawa Loop)") },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = EcoGreenPrimary,
-                            unfocusedBorderColor = DarkBorder,
-                            focusedTextColor = TextOnDarkPrimary,
-                            unfocusedTextColor = TextOnDarkPrimary
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+        Spacer(modifier = Modifier.height(14.dp))
+        Text("Scheduled Routes for $selectedDay (${schedulesForSelectedDay.size}):", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+        Spacer(modifier = Modifier.height(6.dp))
 
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Select Barangay Scope (42 Nasugbu Barangays):", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    nasugbuBarangays.take(6).forEach { bgy ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { selectedBarangay = bgy }.fillMaxWidth().padding(vertical = 2.dp)
-                        ) {
-                            RadioButton(selected = selectedBarangay == bgy, onClick = { selectedBarangay = bgy })
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(bgy, fontSize = 11.sp, color = TextOnDarkPrimary)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Select Road Segments (PostGIS Road Geometry):", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    nasugbuStreets.forEach { street ->
-                        val isSelected = selectedStreets.contains(street)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable {
-                                selectedStreets = if (isSelected) selectedStreets - street else selectedStreets + street
-                            }.fillMaxWidth().padding(vertical = 2.dp)
-                        ) {
-                            Checkbox(checked = isSelected, onCheckedChange = { checked ->
-                                selectedStreets = if (checked) selectedStreets + street else selectedStreets - street
-                            })
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(street, fontSize = 11.sp, color = TextOnDarkPrimary)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (routeNameInput.isNotBlank() && selectedStreets.isNotEmpty()) {
-                            if (editingRoute != null) {
-                                editingRoute?.routeName = routeNameInput.trim()
-                                editingRoute?.street = selectedStreets
-                            } else {
-                                val newRoute = Route(
-                                    routeName = routeNameInput.trim(),
-                                    street = selectedStreets,
-                                    id = "rt_${System.currentTimeMillis()}",
-                                    barangaysCovered = "$selectedBarangay (${selectedStreets.joinToString(", ")})"
-                                )
-                                HakotRepository.routes.add(newRoute)
-                            }
-                            successMsg = "Route '${routeNameInput.trim()}' saved successfully!"
-                            showPlannerModal = false
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
-                ) {
-                    Text("Save Route", color = Color.Black, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPlannerModal = false }) {
-                    Text("Cancel", color = TextOnDarkSecondary)
-                }
-            },
-            containerColor = DarkSurfaceCard
-        )
-    }
-}
-
-
-
-@Composable
-fun AdminSchedulesView() {
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 20.dp)
-    ) {
-        items(HakotRepository.schedules) { sch ->
+        if (schedulesForSelectedDay.isEmpty()) {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(sch.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    Text("🗓️ Date: ${sch.date} • Time: ${sch.startTime} - ${sch.endTime}", fontSize = 12.sp, color = EcoGreenLight)
-                    Text("Status: ${sch.status}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                Text("No collection routes scheduled for this day.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(16.dp))
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                schedulesForSelectedDay.forEach { sch ->
+                    val isToday = sch.date == today
+                    val statusLabel = when {
+                        sch.isDisabled -> "Disabled"
+                        sch.date.isAfter(today) -> "Upcoming"
+                        isToday && now.toLocalTime().isBefore(sch.startTime) -> "Upcoming"
+                        isToday && !now.toLocalTime().isAfter(sch.endTime) -> "Active"
+                        else -> "Completed / Expired"
+                    }
+
+                    val statusColor = when (statusLabel) {
+                        "Active" -> EcoGreenLight
+                        "Upcoming" -> EcoGreenLight
+                        "Disabled" -> HazardousRed
+                        else -> TextOnDarkSecondary
+                    }
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, if (statusLabel == "Active") EcoGreenPrimary else DarkBorder, RoundedCornerShape(16.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(sch.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                Surface(
+                                    color = if (statusLabel == "Active") EcoGreenContainer else DarkSurface,
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, statusColor)
+                                ) {
+                                    Text(
+                                        text = statusLabel,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = statusColor,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("📍 Barangay Scope: ${sch.barangay}", fontSize = 12.sp, color = EcoGreenLight)
+                            Text("🗓️ Date: ${sch.date} • Time: ${sch.startTime} - ${sch.endTime}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                            Text("🚛 Assigned Truck: ${sch.truckAssigned}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                            if (sch.isWeeklyRepeat) {
+                                Text("🔄 Repeats Weekly until ${sch.recurrenceEndDate}", fontSize = 10.sp, color = EcoGreenLight)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = {
+                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                    if (idx != -1) {
+                                        HakotRepository.schedules[idx] = sch.copy(isDisabled = !sch.isDisabled)
+                                    }
+                                }) {
+                                    Text(if (sch.isDisabled) "Enable Schedule" else "Disable Schedule", fontSize = 11.sp, color = if (sch.isDisabled) EcoGreenLight else HazardousRed)
+                                }
+                                TextButton(onClick = {
+                                    HakotRepository.schedules.removeIf { it.id == sch.id }
+                                }) {
+                                    Text("Cancel Schedule", fontSize = 11.sp, color = HazardousRed)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
+}
 
+@Composable
+fun PlanScheduleDialog(
+    onDismiss: () -> Unit,
+    onSaveSchedule: (String, String, LocalDate, LocalTime, LocalTime, String, Boolean, LocalDate?) -> Unit
+) {
+    val savedRoutes = HakotRepository.routes
+    var selectedRoute by remember { mutableStateOf(savedRoutes.firstOrNull()) }
+    var scheduleType by remember { mutableStateOf("SPECIFIC_DATE") } // "SPECIFIC_DATE" or "DAY_OF_WEEK"
+    var collectionDate by remember { mutableStateOf(LocalDate.now().toString()) }
+    var selectedDayOfWeek by remember { mutableStateOf(DayOfWeek.MONDAY) }
+    var startTime by remember { mutableStateOf("08:00") }
+    var endTime by remember { mutableStateOf("11:30") }
+    var assignedTruck by remember { mutableStateOf(HakotRepository.trucks.firstOrNull()?.let { "${it.plateNumber} (${it.truckCode})" } ?: "ABK-8891 (Dump Truck A)") }
+    var repeatEndDate by remember { mutableStateOf(LocalDate.now().plusMonths(3).toString()) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
 
+    val daysOfWeekList = listOf(
+        DayOfWeek.MONDAY to "Monday",
+        DayOfWeek.TUESDAY to "Tuesday",
+        DayOfWeek.WEDNESDAY to "Wednesday",
+        DayOfWeek.THURSDAY to "Thursday",
+        DayOfWeek.FRIDAY to "Friday",
+        DayOfWeek.SATURDAY to "Saturday",
+        DayOfWeek.SUNDAY to "Sunday"
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Plan a Schedule (Date or Day of Week + Time)", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                errorMsg?.let {
+                    Surface(color = HazardousRed.copy(alpha = 0.2f), shape = RoundedCornerShape(6.dp)) {
+                        Text(it, fontSize = 11.sp, color = HazardousRed, modifier = Modifier.padding(6.dp))
+                    }
+                }
+
+                Text("Select Saved Route:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                if (savedRoutes.isEmpty()) {
+                    Text("No saved routes found. Please create a route first.", fontSize = 11.sp, color = HazardousRed)
+                } else {
+                    savedRoutes.forEach { rt ->
+                        val isSelected = selectedRoute?.id == rt.id
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable { selectedRoute = rt }
+                                .fillMaxWidth()
+                                .background(if (isSelected) EcoGreenContainer.copy(alpha = 0.4f) else Color.Transparent)
+                                .padding(4.dp)
+                        ) {
+                            RadioButton(selected = isSelected, onClick = { selectedRoute = rt })
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Column {
+                                Text(rt.routeName, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                Text("📍 ${rt.barangaysCovered}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Schedule Frequency Type:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = scheduleType == "SPECIFIC_DATE", onClick = { scheduleType = "SPECIFIC_DATE" })
+                    Text("Specific Date", fontSize = 11.sp, color = TextOnDarkPrimary)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    RadioButton(selected = scheduleType == "DAY_OF_WEEK", onClick = { scheduleType = "DAY_OF_WEEK" })
+                    Text("Day of Week (Weekly)", fontSize = 11.sp, color = TextOnDarkPrimary)
+                }
+
+                if (scheduleType == "SPECIFIC_DATE") {
+                    OutlinedTextField(
+                        value = collectionDate,
+                        onValueChange = { collectionDate = it },
+                        label = { Text("Collection Date (YYYY-MM-DD)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    Text("Select Day of Week:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkSecondary)
+                    Box(modifier = Modifier.fillMaxWidth().height(40.dp)) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            items(daysOfWeekList) { (dow, label) ->
+                                FilterChip(
+                                    selected = selectedDayOfWeek == dow,
+                                    onClick = { selectedDayOfWeek = dow },
+                                    label = { Text(label.take(3), fontSize = 10.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight, containerColor = DarkSurface, labelColor = TextOnDarkSecondary)
+                                )
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = repeatEndDate,
+                        onValueChange = { repeatEndDate = it },
+                        label = { Text("Recurrence End Date (YYYY-MM-DD)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = startTime,
+                        onValueChange = { startTime = it },
+                        label = { Text("Start Time (HH:MM)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = endTime,
+                        onValueChange = { endTime = it },
+                        label = { Text("End Time (HH:MM)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (selectedRoute == null) {
+                        errorMsg = "Please select a saved route."
+                        return@Button
+                    }
+                    try {
+                        val start = LocalTime.parse(startTime.trim())
+                        val end = LocalTime.parse(endTime.trim())
+
+                        if (!end.isAfter(start)) {
+                            errorMsg = "End time must be later than start time."
+                            return@Button
+                        }
+
+                        val date: LocalDate
+                        val repeatWeekly: Boolean
+                        val endRecur: LocalDate?
+
+                        if (scheduleType == "SPECIFIC_DATE") {
+                            date = LocalDate.parse(collectionDate.trim())
+                            if (date.isBefore(LocalDate.now())) {
+                                errorMsg = "Collection date cannot be in the past."
+                                return@Button
+                            }
+                            repeatWeekly = false
+                            endRecur = null
+                        } else {
+                            var d = LocalDate.now()
+                            while (d.dayOfWeek != selectedDayOfWeek) {
+                                d = d.plusDays(1)
+                            }
+                            date = d
+                            repeatWeekly = true
+                            endRecur = LocalDate.parse(repeatEndDate.trim())
+                            if (endRecur.isBefore(date)) {
+                                errorMsg = "Recurrence end date must be after start date."
+                                return@Button
+                            }
+                        }
+
+                        onSaveSchedule(
+                            selectedRoute!!.routeName,
+                            selectedRoute!!.routeName,
+                            date,
+                            start,
+                            end,
+                            assignedTruck,
+                            repeatWeekly,
+                            endRecur
+                        )
+                    } catch (e: Exception) {
+                        errorMsg = "Invalid date/time format (use YYYY-MM-DD and HH:MM)."
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+            ) {
+                Text("Confirm and Save", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextOnDarkSecondary)
+            }
+        },
+        containerColor = DarkSurfaceCard
+    )
+}
 
 @Composable
 fun AdminTrucksView() {
