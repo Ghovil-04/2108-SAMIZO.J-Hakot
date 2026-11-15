@@ -521,7 +521,7 @@ object SupabaseClient {
                 setRequestProperty("apikey", SUPABASE_ANON_KEY)
                 setRequestProperty("Authorization", "Bearer $accessToken")
                 setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("Prefer", "return=minimal")
+                setRequestProperty("Prefer", "resolution=merge-duplicates,return=minimal")
                 doOutput = true
                 connectTimeout = 5000
                 readTimeout = 5000
