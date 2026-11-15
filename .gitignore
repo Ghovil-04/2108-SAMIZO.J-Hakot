@@ -1,0 +1,11 @@
+
+# Dependencies
+node_modules/
+
+# Local Supabase temporary files
+**/.temp/
+
+# Local environment files
+.env
+.env.*
+!.env.example
