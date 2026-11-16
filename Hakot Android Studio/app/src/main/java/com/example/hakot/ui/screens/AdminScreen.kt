@@ -102,6 +102,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -2009,11 +2011,25 @@ fun MapRoutePlannerScreen(
         else availableRoads.filter { it.segmentName.contains(roadSearchQuery, ignoreCase = true) || it.roadType.contains(roadSearchQuery, ignoreCase = true) }
     }
 
-    val selectedGisSegments = selectedRoadSegmentIds.mapNotNull { id -> GisManager.roadSegments.find { it.id == id } }
-
-    val routeGeoPoints = remember(selectedGisSegments) {
-        selectedGisSegments.flatMap { seg -> seg.lineStringCoordinates.map { (lng, lat) -> GeoPoint(lat, lng) } }
+    val selectedGisSegments = remember(selectedRoadSegmentIds, availableRoads, GisManager.isLoaded) {
+        selectedRoadSegmentIds.mapNotNull { id ->
+            availableRoads.find { it.id == id } ?: GisManager.roadSegments.find { it.id == id }
+        }
     }
+
+    var flipStateTrigger by remember { mutableStateOf(0) }
+
+    val routeSegmentsList = remember(selectedGisSegments, flipStateTrigger, selectedGisSegments.map { "${it.id}_${it.isReversed}" }) {
+        selectedGisSegments.mapNotNull { seg ->
+            val rawCoords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+            val coords = if (seg.isReversed) rawCoords.reversed() else rawCoords
+            val points = coords.mapNotNull { (lng, lat) ->
+                if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+            }
+            if (points.size >= 2) points else null
+        }
+    }
+    val routeGeoPoints = remember(routeSegmentsList) { routeSegmentsList.flatten() }
 
     if (isGisLoading && !GisManager.isLoaded) {
         Box(
@@ -2035,6 +2051,7 @@ fun MapRoutePlannerScreen(
             DarkMapView(
                 modifier = Modifier.fillMaxSize(),
                 customRoutePoints = routeGeoPoints,
+                customRouteSegments = routeSegmentsList,
                 barangayRoads = availableRoads,
                 selectedRoadIds = selectedRoadSegmentIds
             )
@@ -2137,6 +2154,40 @@ fun MapRoutePlannerScreen(
                                     labelColor = TextOnDarkSecondary
                                 )
                             )
+                        }
+                    }
+                }
+
+                if (selectedGisSegments.isNotEmpty()) {
+                    Text("Selected Roads Sequence & Direction (Flip to reverse):", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        itemsIndexed(selectedGisSegments) { idx, seg ->
+                            Surface(
+                                color = DarkSurface,
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, EcoGreenPrimary)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text("${idx + 1}. ${seg.segmentName.take(16)}...", fontSize = 10.sp, color = TextOnDarkPrimary)
+                                    TextButton(
+                                        onClick = {
+                                            seg.isReversed = !seg.isReversed
+                                            flipStateTrigger++
+                                        },
+                                        contentPadding = PaddingValues(2.dp),
+                                        modifier = Modifier.size(54.dp, 24.dp)
+                                    ) {
+                                        Text(if (seg.isReversed) "Rev ⇄" else "Fwd ⇄", fontSize = 9.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2307,6 +2358,37 @@ fun MapRoutePlannerScreen(
                     }
 
                     Text("Assigned Truck: $assignedTruckInput", fontSize = 11.sp, color = TextOnDarkSecondary)
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Route Travel Sequence & Traversal Direction:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        selectedGisSegments.forEachIndexed { idx, seg ->
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(6.dp))
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("${idx + 1}. ${seg.segmentName}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                        Text("Direction: ${if (seg.isReversed) "Reversed (◀)" else "Forward (➔)"}", fontSize = 9.sp, color = EcoGreenLight)
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            seg.isReversed = !seg.isReversed
+                                        },
+                                        contentPadding = PaddingValues(2.dp)
+                                    ) {
+                                        Text("⇄ Flip", fontSize = 10.sp, color = EcoGreenLight)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -2372,23 +2454,29 @@ fun MapRoutePlannerScreen(
 @Composable
 fun CollectionScheduleDashboardView() {
     val context = LocalContext.current
+    val zoneId = ZoneId.of("Asia/Manila")
     var showSchedulePlanner by remember { mutableStateOf(false) }
-    var selectedWeekStart by remember { mutableStateOf(LocalDate.now().with(DayOfWeek.MONDAY)) }
-    var selectedDay by remember { mutableStateOf(LocalDate.now()) }
+    var selectedScheduleDetail by remember { mutableStateOf<ScheduleItem?>(null) }
+    var scheduleToDelete by remember { mutableStateOf<ScheduleItem?>(null) }
+    var isLoadingSchedules by remember { mutableStateOf(false) }
+    var selectedWeekStart by remember { mutableStateOf(LocalDate.now(zoneId).with(DayOfWeek.MONDAY)) }
+    var selectedDay by remember { mutableStateOf(LocalDate.now(zoneId)) }
     var successMsg by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        HakotRepository.fetchSchedulesFromSupabase(context)
+    LaunchedEffect(Unit, showSchedulePlanner) {
+        if (!showSchedulePlanner) {
+            isLoadingSchedules = true
+            HakotRepository.fetchSchedulesFromSupabase(context)
+            isLoadingSchedules = false
+        }
     }
 
     val daysOfWeek = (0..6).map { selectedWeekStart.plusDays(it.toLong()) }
     val now = LocalDateTime.now(ZoneId.of("Asia/Manila"))
     val today = LocalDate.now(ZoneId.of("Asia/Manila"))
 
-    val schedulesForSelectedDay = HakotRepository.schedules.filter { sch ->
-        val match = !sch.isDisabled && (sch.date == selectedDay || sch.date.toString() == selectedDay.toString() || (sch.isWeeklyRepeat && !selectedDay.isBefore(sch.date) && (sch.recurrenceEndDate == null || !selectedDay.isAfter(sch.recurrenceEndDate)) && selectedDay.dayOfWeek == sch.date.dayOfWeek))
-        Log.d("HAKOT_DEBUG", "Checking schedule id=${sch.id} name=${sch.routeName} date=${sch.date} selectedDay=$selectedDay match=$match")
-        match
+    val schedulesForSelectedDay = HakotRepository.schedules.filter {
+        HakotRepository.isScheduleActiveOnDate(it, selectedDay)
     }
 
     if (showSchedulePlanner) {
@@ -2402,14 +2490,6 @@ fun CollectionScheduleDashboardView() {
                 initialDate = selectedDay,
                 onDismiss = { showSchedulePlanner = false },
                 onSaveScheduledRoute = { routeName, scheduleName, barangayName, date, startTime, endTime, truck, repeatWeekly, repeatEnd, segments ->
-                    val streetNames = segments.map { it.segmentName }
-                    val newRoute = Route(
-                        routeName = routeName,
-                        street = streetNames,
-                        id = "rt_${System.currentTimeMillis()}",
-                        barangaysCovered = barangayName
-                    )
-
                     val newSchedule = ScheduleItem(
                         id = "sch_${System.currentTimeMillis()}",
                         barangay = barangayName,
@@ -2422,22 +2502,25 @@ fun CollectionScheduleDashboardView() {
                         status = "Scheduled",
                         isWeeklyRepeat = repeatWeekly,
                         recurrenceEndDate = repeatEnd,
-                        isDisabled = false
+                        isDisabled = false,
+                        orderedSegments = segments
                     )
 
-                    HakotRepository.addSchedule(newSchedule)
-                    HakotRepository.addRoute(newRoute)
-
-                    selectedDay = date
-                    selectedWeekStart = date.with(DayOfWeek.MONDAY)
-
                     scope.launch {
-                        HakotRepository.saveRouteToSupabase(newRoute, context)
-                        HakotRepository.saveScheduledRouteToSupabase(newSchedule, context)
+                        val schedRes = HakotRepository.saveScheduledRouteToSupabase(newSchedule, context)
+                        if (schedRes.first) {
+                            selectedDay = date
+                            selectedWeekStart = date.with(DayOfWeek.MONDAY)
+                            HakotRepository.fetchSchedulesFromSupabase(context)
+                            successMsg = "Success: Scheduled route '$routeName' saved to table 'Collection_Scheds' for $date!"
+                            Toast.makeText(context, "Schedule '$routeName' saved successfully to Supabase!", Toast.LENGTH_LONG).show()
+                            showSchedulePlanner = false
+                        } else {
+                            successMsg = "Database Schedule Error: ${schedRes.second}"
+                            Toast.makeText(context, "Save Failed: ${schedRes.second}", Toast.LENGTH_LONG).show()
+                            Log.e("HAKOT_SAVE", "Failed to save to Collection_Scheds: ${schedRes.second}")
+                        }
                     }
-
-                    successMsg = "Scheduled route '$routeName' ($barangayName) saved to table 'scheduled_routes' for $date ($startTime - $endTime)!"
-                    showSchedulePlanner = false
                 }
             )
         }
@@ -2501,8 +2584,8 @@ fun CollectionScheduleDashboardView() {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     daysOfWeek.forEach { day ->
                         val isSelected = day == selectedDay
-                        val hasSchedules = HakotRepository.schedules.any { sch ->
-                            !sch.isDisabled && (sch.date == day || sch.date.toString() == day.toString() || (sch.isWeeklyRepeat && !day.isBefore(sch.date) && (sch.recurrenceEndDate == null || !day.isAfter(sch.recurrenceEndDate)) && day.dayOfWeek == sch.date.dayOfWeek))
+                        val hasSchedules = HakotRepository.schedules.any {
+                            HakotRepository.isScheduleActiveOnDate(it, day)
                         }
 
                         Column(
@@ -2525,7 +2608,16 @@ fun CollectionScheduleDashboardView() {
         Text("Scheduled Routes for $selectedDay (${schedulesForSelectedDay.size}):", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
         Spacer(modifier = Modifier.height(6.dp))
 
-        if (schedulesForSelectedDay.isEmpty()) {
+        if (isLoadingSchedules) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = EcoGreenPrimary)
+            }
+        } else if (schedulesForSelectedDay.isEmpty()) {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
                 shape = RoundedCornerShape(12.dp),
@@ -2552,10 +2644,19 @@ fun CollectionScheduleDashboardView() {
                         else -> TextOnDarkSecondary
                     }
 
+                    val scope = rememberCoroutineScope()
+                    val cardAlpha = if (sch.isDisabled) 0.4f else 1f
+
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard.copy(alpha = cardAlpha)),
                         shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth().border(1.dp, if (statusLabel == "Active") EcoGreenPrimary else DarkBorder, RoundedCornerShape(16.dp))
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { 
+                                Log.d("HAKOT_ROUTE", "CLICK_SCHEDULE: Selected schedule id=${sch.id}, routeName=${sch.routeName}, orderedSegments.size=${sch.orderedSegments.size}")
+                                selectedScheduleDetail = sch 
+                            }
+                            .border(1.dp, if (sch.isDisabled) TextOnDarkSecondary.copy(alpha = 0.3f) else if (statusLabel == "Active") EcoGreenPrimary else DarkBorder, RoundedCornerShape(16.dp))
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(
@@ -2563,46 +2664,225 @@ fun CollectionScheduleDashboardView() {
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(sch.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                Text(sch.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (sch.isDisabled) TextOnDarkSecondary else TextOnDarkPrimary)
                                 Surface(
-                                    color = if (statusLabel == "Active") EcoGreenContainer else DarkSurface,
+                                    color = if (sch.isDisabled) DarkSurface else if (statusLabel == "Active") EcoGreenContainer else DarkSurface,
                                     shape = RoundedCornerShape(6.dp),
-                                    border = BorderStroke(1.dp, statusColor)
+                                    border = BorderStroke(1.dp, if (sch.isDisabled) TextOnDarkSecondary else statusColor)
                                 ) {
                                     Text(
-                                        text = statusLabel,
+                                        text = if (sch.isDisabled) "Inactive / Pale" else statusLabel,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = statusColor,
+                                        color = if (sch.isDisabled) TextOnDarkSecondary else statusColor,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                     )
                                 }
                             }
                             Spacer(modifier = Modifier.height(4.dp))
-                            Text("📍 Barangay Scope: ${sch.barangay}", fontSize = 12.sp, color = EcoGreenLight)
+                            Text("📍 Barangay Scope: ${sch.barangay}", fontSize = 12.sp, color = if (sch.isDisabled) TextOnDarkSecondary else EcoGreenLight)
                             Text("🗓️ Date: ${sch.date} • Time: ${sch.startTime} - ${sch.endTime}", fontSize = 11.sp, color = TextOnDarkSecondary)
                             Text("🚛 Assigned Truck: ${sch.truckAssigned}", fontSize = 11.sp, color = TextOnDarkSecondary)
                             if (sch.isWeeklyRepeat) {
-                                Text("🔄 Repeats Weekly until ${sch.recurrenceEndDate}", fontSize = 10.sp, color = EcoGreenLight)
+                                Text("🔄 Repeats Weekly until ${sch.recurrenceEndDate}", fontSize = 10.sp, color = if (sch.isDisabled) TextOnDarkSecondary else EcoGreenLight)
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                TextButton(onClick = {
-                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
-                                    if (idx != -1) {
-                                        HakotRepository.schedules[idx] = sch.copy(isDisabled = !sch.isDisabled)
-                                    }
-                                }) {
-                                    Text(if (sch.isDisabled) "Enable Schedule" else "Disable Schedule", fontSize = 11.sp, color = if (sch.isDisabled) EcoGreenLight else HazardousRed)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Switch(
+                                        checked = !sch.isDisabled,
+                                        onCheckedChange = { isChecked ->
+                                            scope.launch {
+                                                val updated = sch.copy(isDisabled = !isChecked)
+                                                val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                                if (success) {
+                                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                                    if (idx != -1) {
+                                                        HakotRepository.schedules[idx] = updated
+                                                    }
+                                                } else {
+                                                    successMsg = "Failed to update schedule status in Supabase."
+                                                }
+                                            }
+                                        },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = EcoGreenPrimary,
+                                            checkedTrackColor = EcoGreenContainer,
+                                            uncheckedThumbColor = TextOnDarkSecondary,
+                                            uncheckedTrackColor = DarkSurface
+                                        )
+                                    )
+                                    Text(if (sch.isDisabled) "Inactive" else "Active", fontSize = 11.sp, color = if (sch.isDisabled) TextOnDarkSecondary else EcoGreenLight, fontWeight = FontWeight.Bold)
                                 }
+
                                 TextButton(onClick = {
-                                    HakotRepository.schedules.removeIf { it.id == sch.id }
+                                    scheduleToDelete = sch
                                 }) {
                                     Text("Cancel Schedule", fontSize = 11.sp, color = HazardousRed)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    scheduleToDelete?.let { schToDel ->
+        val scope = rememberCoroutineScope()
+        AlertDialog(
+            onDismissRequest = { scheduleToDelete = null },
+            title = { Text("Confirm Schedule Cancellation", color = TextOnDarkPrimary, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to cancel and permanently delete route '${schToDel.routeName}' for ${schToDel.date} from the Supabase database?", color = TextOnDarkSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val success = HakotRepository.deleteScheduleFromSupabase(schToDel.id, context)
+                            if (success) {
+                                successMsg = "Successfully cancelled and deleted schedule '${schToDel.routeName}'."
+                            } else {
+                                successMsg = "Failed to delete schedule from Supabase."
+                            }
+                            scheduleToDelete = null
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed)
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { scheduleToDelete = null }) {
+                    Text("Keep", color = TextOnDarkPrimary)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
+    }
+
+    selectedScheduleDetail?.let { sch ->
+        val routeSegmentsList = remember(sch, GisManager.roadSegments) {
+            sch.orderedSegments.mapNotNull { seg ->
+                val baseSeg = GisManager.roadSegments.find { it.id == seg.id } ?: seg
+                val rawCoords = when {
+                    seg.clippedCoordinates.isNotEmpty() -> seg.clippedCoordinates
+                    seg.lineStringCoordinates.isNotEmpty() -> seg.lineStringCoordinates
+                    baseSeg.clippedCoordinates.isNotEmpty() -> baseSeg.clippedCoordinates
+                    baseSeg.lineStringCoordinates.isNotEmpty() -> baseSeg.lineStringCoordinates
+                    else -> emptyList()
+                }
+                val coords = if (seg.isReversed) rawCoords.reversed() else rawCoords
+                val points = coords.mapNotNull { (lng, lat) ->
+                    if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                }
+                if (points.size >= 2) points else null
+            }
+        }
+        val routeGeoPoints = remember(routeSegmentsList) { routeSegmentsList.flatten() }
+
+        Log.d("HAKOT_ROUTE", "AFTER_REMEMBER: scheduleId=${sch.id}, routeGeoPoints.size=${routeGeoPoints.size}, segmentsCount=${routeSegmentsList.size}")
+
+        Dialog(
+            onDismissRequest = { selectedScheduleDetail = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+                color = DarkBackground,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(sch.routeName, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Text("Barangay: ${sch.barangay} • Date: ${sch.date}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                        }
+                        IconButton(onClick = { selectedScheduleDetail = null }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkPrimary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(280.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                    ) {
+                        Log.d("HAKOT_ROUTE", "BEFORE_DARKMAPVIEW: customRoutePoints.size=${routeGeoPoints.size}, customRouteSegments.size=${routeSegmentsList.size}")
+                        DarkMapView(
+                            modifier = Modifier.fillMaxSize(),
+                            customRoutePoints = routeGeoPoints,
+                            customRouteSegments = routeSegmentsList
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("SCHEDULE & ROUTE DETAILS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                        Text("🗓️ Collection Date: ${sch.date}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("⏰ Time Window: ${sch.startTime} - ${sch.endTime}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("🚛 Assigned Truck: ${sch.truckAssigned}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("📊 Status: ${sch.status}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        if (sch.isWeeklyRepeat) {
+                            Text("🔄 Weekly Recurrence: Active until ${sch.recurrenceEndDate}", fontSize = 11.sp, color = EcoGreenLight)
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("ROUTE CORRIDOR SEGMENTS (${sch.orderedSegments.size}):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+
+                        if (sch.orderedSegments.isEmpty()) {
+                            Text("No segment details stored.", fontSize = 11.sp, color = TextOnDarkSecondary)
+                        } else {
+                            sch.orderedSegments.forEachIndexed { idx, seg ->
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text("${idx + 1}. ${seg.segmentName}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                            Text("Type: ${seg.roadType}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                                        }
+                                        Text(
+                                            if (seg.isReversed) "Reversed ◀" else "Forward ➔",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = EcoGreenLight
+                                        )
+                                    }
                                 }
                             }
                         }

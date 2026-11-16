@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.model.ScheduleItem
+import androidx.compose.ui.platform.LocalContext
 import com.example.hakot.ui.theme.DarkBackground
 import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurfaceCard
@@ -60,6 +61,7 @@ import com.example.hakot.ui.theme.TextOnDarkPrimary
 import com.example.hakot.ui.theme.TextOnDarkSecondary
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
@@ -69,35 +71,36 @@ fun ScheduleScreen(
     searchQuery: String = "",
     modifier: Modifier = Modifier
 ) {
-    val nowLocalDate = remember { LocalDate.now() }
-    val nowLocalTime = remember { LocalTime.now() }
+    val context = LocalContext.current
+    val nowLocalDate = remember { LocalDate.now(ZoneId.of("Asia/Manila")) }
+    val nowLocalTime = remember { LocalTime.now(ZoneId.of("Asia/Manila")) }
 
     var selectedDate by remember { mutableStateOf(nowLocalDate) }
     var isMonthlyView by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        HakotRepository.fetchSchedulesFromSupabase(context)
+    }
 
     // Update map selected date when schedule date changes
     LaunchedEffect(selectedDate) {
         HakotRepository.selectedMapDate = selectedDate
     }
 
-    val activeCurrentSchedule = remember(selectedDate, nowLocalTime) {
-        if (selectedDate == nowLocalDate) {
-            HakotRepository.schedules.find { sch ->
-                sch.date == selectedDate && !nowLocalTime.isBefore(sch.startTime) && !nowLocalTime.isAfter(sch.endTime)
-            }
-        } else null
-    }
-
-    val schedulesForDate = remember(selectedDate, searchQuery) {
-        HakotRepository.schedules.filter { sch ->
-            val matchesDate = sch.date == selectedDate
-            val matchesSearch = searchQuery.isEmpty() ||
-                sch.barangay.contains(searchQuery, ignoreCase = true) ||
-                sch.routeName.contains(searchQuery, ignoreCase = true) ||
-                sch.wasteCategory.displayName.contains(searchQuery, ignoreCase = true)
-
-            matchesDate && matchesSearch
+    val activeCurrentSchedule = if (selectedDate == nowLocalDate) {
+        HakotRepository.schedules.find { sch ->
+            HakotRepository.isScheduleActiveOnDate(sch, selectedDate) && !nowLocalTime.isBefore(sch.startTime) && !nowLocalTime.isAfter(sch.endTime)
         }
+    } else null
+
+    val schedulesForDate = HakotRepository.schedules.filter { sch ->
+        val matchesDate = HakotRepository.isScheduleActiveOnDate(sch, selectedDate)
+        val matchesSearch = searchQuery.isEmpty() ||
+            sch.barangay.contains(searchQuery, ignoreCase = true) ||
+            sch.routeName.contains(searchQuery, ignoreCase = true) ||
+            sch.wasteCategory.displayName.contains(searchQuery, ignoreCase = true)
+
+        matchesDate && matchesSearch
     }
 
     Column(

@@ -22,7 +22,8 @@ data class GisRoadSegmentFeature(
     val roadType: String,
     val osmWayId: Long,
     val lineStringCoordinates: List<Pair<Double, Double>>, // Original full geometry
-    var clippedCoordinates: List<Pair<Double, Double>> = emptyList() // Exact clipped geometry inside active barangay
+    var clippedCoordinates: List<Pair<Double, Double>> = emptyList(), // Exact clipped geometry inside active barangay
+    var isReversed: Boolean = false // Traversal direction flag
 )
 
 object GisManager {

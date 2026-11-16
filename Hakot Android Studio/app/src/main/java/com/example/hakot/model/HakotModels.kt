@@ -1,5 +1,6 @@
 package com.example.hakot.model
 
+import com.example.hakot.data.GisRoadSegmentFeature
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -331,7 +332,8 @@ data class ScheduleItem(
     val barangayId: String = "brgy_041019001",
     val isWeeklyRepeat: Boolean = false,
     val recurrenceEndDate: LocalDate? = null,
-    val isDisabled: Boolean = false
+    val isDisabled: Boolean = false,
+    val orderedSegments: List<GisRoadSegmentFeature> = emptyList()
 )
 
 data class ReportMessage(

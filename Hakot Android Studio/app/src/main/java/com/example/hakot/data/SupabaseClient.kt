@@ -445,6 +445,7 @@ object SupabaseClient {
     suspend fun fetchAuthenticatedTableRecords(tableName: String, accessToken: String): SupabaseFetchResult =
         withContext(Dispatchers.IO) {
             if (accessToken.isBlank()) {
+                Log.e("HAKOT_FETCH", "fetchAuthenticatedTableRecords failed: Missing access token for table $tableName")
                 return@withContext SupabaseFetchResult(
                     isSuccess = false,
                     statusCode = 401,
@@ -457,17 +458,20 @@ object SupabaseClient {
             try {
                 val separator = if (tableName.contains("?")) "&" else "?"
                 val urlString = "$SUPABASE_URL/rest/v1/$tableName${separator}select=*"
+                Log.d("HAKOT_FETCH", "Fetching records from URL: $urlString")
+
                 connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     setRequestProperty("apikey", SUPABASE_ANON_KEY)
                     setRequestProperty("Authorization", "Bearer $accessToken")
-                    connectTimeout = 5000
-                    readTimeout = 5000
+                    connectTimeout = 20000
+                    readTimeout = 20000
                 }
 
                 val responseCode = connection.responseCode
                 if (responseCode in 200..299) {
                     val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                    Log.d("HAKOT_FETCH", "Fetch SUCCESS (HTTP $responseCode) for $tableName. Raw JSON response: $jsonText")
                     SupabaseFetchResult(
                         isSuccess = true,
                         statusCode = responseCode,
@@ -476,6 +480,7 @@ object SupabaseClient {
                     )
                 } else {
                     val errorText = readErrorStream(connection)
+                    Log.e("HAKOT_FETCH", "Fetch FAILED (HTTP $responseCode) for $tableName: $errorText")
                     SupabaseFetchResult(
                         isSuccess = false,
                         statusCode = responseCode,
@@ -485,6 +490,7 @@ object SupabaseClient {
                 }
 
             } catch (e: Exception) {
+                Log.e("HAKOT_FETCH", "Fetch EXCEPTION for $tableName: ${e.message}", e)
                 SupabaseFetchResult(
                     isSuccess = false,
                     statusCode = -1,
@@ -516,15 +522,16 @@ object SupabaseClient {
 
         try {
             val urlString = "$SUPABASE_URL/rest/v1/$tableName"
+            Log.d("HAKOT_SUPABASE", "Inserting into $urlString with payload: $jsonPayload")
             connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("apikey", SUPABASE_ANON_KEY)
                 setRequestProperty("Authorization", "Bearer $accessToken")
                 setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("Prefer", "resolution=merge-duplicates,return=minimal")
+                setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation")
                 doOutput = true
-                connectTimeout = 5000
-                readTimeout = 5000
+                connectTimeout = 20000
+                readTimeout = 20000
             }
 
             connection.outputStream.use { output ->
@@ -533,6 +540,10 @@ object SupabaseClient {
 
             val responseCode = connection.responseCode
             if (responseCode in 200..299) {
+                val responseText = try {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } catch (_: Exception) { "" }
+                Log.d("HAKOT_SUPABASE", "Insert SUCCESS (HTTP $responseCode) for $tableName. Response: $responseText")
                 SupabaseInsertResult(
                     isSuccess = true,
                     statusCode = responseCode,
@@ -540,6 +551,7 @@ object SupabaseClient {
                 )
             } else {
                 val errorText = readErrorStream(connection)
+                Log.e("HAKOT_SUPABASE", "Insert FAILED (HTTP $responseCode) for $tableName: $errorText")
                 SupabaseInsertResult(
                     isSuccess = false,
                     statusCode = responseCode,
@@ -548,6 +560,7 @@ object SupabaseClient {
             }
 
         } catch (e: Exception) {
+            Log.e("HAKOT_SUPABASE", "Insert EXCEPTION for $tableName", e)
             SupabaseInsertResult(
                 isSuccess = false,
                 statusCode = -1,
@@ -585,8 +598,8 @@ object SupabaseClient {
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Prefer", "return=representation")
                 doOutput = true
-                connectTimeout = 5000
-                readTimeout = 5000
+                connectTimeout = 20000
+                readTimeout = 20000
             }
             connection.outputStream.use { output ->
                 output.write(jsonPayload.toString().toByteArray(Charsets.UTF_8))
@@ -631,8 +644,8 @@ object SupabaseClient {
                 setRequestProperty("apikey", SUPABASE_ANON_KEY)
                 setRequestProperty("Authorization", "Bearer $accessToken")
                 setRequestProperty("Prefer", "return=minimal")
-                connectTimeout = 5000
-                readTimeout = 5000
+                connectTimeout = 20000
+                readTimeout = 20000
             }
             val code = connection.responseCode
             if (code in 200..299) {
@@ -648,9 +661,43 @@ object SupabaseClient {
         }
     }
 
-    // ---------------------------------------------------------
-    // EXPLICIT EDGE FUNCTION INVOCATION (Requires user JWT)
-    // ---------------------------------------------------------
+    suspend fun invokeRpc(
+        rpcName: String,
+        jsonPayload: JSONObject,
+        accessToken: String
+    ): SupabaseInsertResult = withContext(Dispatchers.IO) {
+        if (accessToken.isBlank()) {
+            return@withContext SupabaseInsertResult(false, 401, "Missing access token")
+        }
+        var connection: HttpURLConnection? = null
+        try {
+            val urlString = "$SUPABASE_URL/rest/v1/rpc/$rpcName"
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("apikey", SUPABASE_ANON_KEY)
+                setRequestProperty("Authorization", "Bearer $accessToken")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Prefer", "return=minimal")
+                doOutput = true
+                connectTimeout = 20000
+                readTimeout = 20000
+            }
+            connection.outputStream.use { output ->
+                output.write(jsonPayload.toString().toByteArray(Charsets.UTF_8))
+            }
+            val code = connection.responseCode
+            if (code in 200..299) {
+                SupabaseInsertResult(true, code, null)
+            } else {
+                val err = readErrorStream(connection)
+                SupabaseInsertResult(false, code, "HTTP $code: $err")
+            }
+        } catch (e: Exception) {
+            SupabaseInsertResult(false, -1, e.message ?: "Unknown RPC exception")
+        } finally {
+            connection?.disconnect()
+        }
+    }
 
     suspend fun invokeManagementEdgeFunction(
         action: String,
@@ -912,8 +959,8 @@ object SupabaseClient {
                     requestMethod = "GET"
                     setRequestProperty("apikey", SUPABASE_ANON_KEY)
                     setRequestProperty("Authorization", "Bearer $accessToken")
-                    connectTimeout = 5000
-                    readTimeout = 5000
+                    connectTimeout = 20000
+                    readTimeout = 20000
                 }
                 val code = connection.responseCode
                 if (code in 200..299) {
