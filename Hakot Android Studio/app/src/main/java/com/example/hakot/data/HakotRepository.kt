@@ -18,6 +18,7 @@ import com.example.hakot.model.AuditLogEntry
 import com.example.hakot.model.CollectionRoute
 import com.example.hakot.model.DistrictAdminInvitation
 import com.example.hakot.model.Dumpsite
+import com.example.hakot.model.Dumptrack
 import com.example.hakot.model.GarbageTruck
 import com.example.hakot.model.OrganizationConfig
 import com.example.hakot.model.OrganizationType
@@ -163,22 +164,7 @@ object HakotRepository {
         )
     )
 
-    val trucks = mutableStateListOf<GarbageTruck>(
-        GarbageTruck(
-            id = "tr_1",
-            truckCode = "Hakot Truck #1",
-            plateNumber = "ABK-8891",
-            driverName = "Unassigned Driver",
-            assignedRoute = "C. Alvarez to F. Alix Street Corridor",
-            assignedBarangays = "C. Alvarez St → J.P. Laurel St → F. Alix St",
-            destinationDumpsite = "Nasugbu MRF Facility",
-            latitude = 14.0715,
-            longitude = 120.6255,
-            status = TruckStatus.ACTIVE_ON_ROUTE,
-            speedKmH = 22,
-            lastGpsUpdate = "Live - 1 min ago"
-        )
-    )
+    val trucks = mutableStateListOf<GarbageTruck>()
 
     val routes = mutableStateListOf<CollectionRoute>(
         CollectionRoute(
@@ -1005,6 +991,65 @@ object HakotRepository {
 
     fun removeTruck(id: String) {
         trucks.removeIf { it.id == id }
+    }
+
+    suspend fun fetchTrucksFromSupabase(context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: return false
+        val fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucks?municipality_id=eq.${activeOrganization.municipalityId}", token)
+        if (fetchRes.isSuccess && fetchRes.data != null) {
+            try {
+                val array = fetchRes.data
+                val list = mutableListOf<Dumptrack>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    list.add(
+                        Dumptrack(
+                            id = obj.optString("id", "tr_$i"),
+                            truckCode = obj.optString("truck_code", "Hakot Truck #${i+1}"),
+                            plateNumber = obj.optString("plate_number", "ABK-8891"),
+                            driverName = obj.optString("driver_name", "Unassigned Driver"),
+                            assignedRoute = obj.optString("assigned_route", "Collection Route"),
+                            assignedBarangays = obj.optString("assigned_barangays", "Nasugbu Scope"),
+                            destinationDumpsite = obj.optString("destination_dumpsite", "Nasugbu MRF Facility"),
+                            latitude = 14.0725,
+                            longitude = 120.6335
+                        )
+                    )
+                }
+                trucks.clear()
+                trucks.addAll(list)
+                return true
+            } catch (e: Exception) {
+                Log.e("HAKOT_REPO", "Error parsing trucks from Supabase", e)
+            }
+        }
+        return false
+    }
+
+    suspend fun saveTruckToSupabase(truck: Dumptrack, context: Context): Pair<Boolean, String> {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        if (token.isBlank()) {
+            return Pair(false, "Authentication error: Active admin session required.")
+        }
+
+        val payload = JSONObject().apply {
+            put("id", truck.id)
+            put("municipality_id", activeOrganization.municipalityId)
+            put("truck_code", truck.truckCode)
+            put("plate_number", truck.plateNumber)
+            put("driver_name", truck.driverName)
+            put("status", "ACTIVE_ON_ROUTE")
+        }
+
+        val res = SupabaseClient.insertAuthenticatedTableRecord("trucks", payload, token)
+        if (res.isSuccess) {
+            if (!trucks.any { it.id == truck.id }) {
+                trucks.add(truck)
+            }
+            return Pair(true, "Successfully saved truck to Supabase.")
+        } else {
+            return Pair(false, "Supabase Truck Error: ${res.errorMessage}")
+        }
     }
 
     fun addRoute(route: CollectionRoute) {

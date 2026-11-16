@@ -22,6 +22,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.hakot.ui.components.DarkMapView
 import com.example.hakot.model.Route
+import com.example.hakot.model.Dumptrack
 import androidx.compose.material3.CircularProgressIndicator
 import com.example.hakot.model.ScheduleItem
 import com.example.hakot.model.WasteCategory
@@ -3090,31 +3091,196 @@ fun PlanScheduleDialog(
 
 @Composable
 fun AdminTrucksView() {
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 20.dp)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showAddTruckDialog by remember { mutableStateOf(false) }
+    var successMsg by remember { mutableStateOf<String?>(null) }
+
+    var truckCodeInput by remember { mutableStateOf("Hakot Truck #${HakotRepository.trucks.size + 1}") }
+    var plateNumberInput by remember { mutableStateOf("XYZ-${(1000..9999).random()}") }
+    var driverNameInput by remember { mutableStateOf("") }
+    var assignedRouteInput by remember { mutableStateOf("Nasugbu Main Route") }
+    var destinationInput by remember { mutableStateOf("Nasugbu MRF Facility") }
+
+    LaunchedEffect(Unit) {
+        HakotRepository.fetchTrucksFromSupabase(context)
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        items(HakotRepository.trucks) { tr ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Fleet Trucks Management", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                Text("Manage municipal collection trucks & drivers", fontSize = 11.sp, color = TextOnDarkSecondary)
+            }
+            Button(
+                onClick = { showAddTruckDialog = true },
+                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text = "${tr.truckCode} (${tr.plateNumber})",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextOnDarkPrimary
-                    )
-                    Text(
-                        text = "Driver: ${tr.driverName} • Route: ${tr.assignedRoute}",
-                        fontSize = 12.sp,
-                        color = TextOnDarkSecondary
-                    )
+                Text("Add New Truck", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        successMsg?.let {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = EcoGreenContainer),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(10.dp))
+            ) {
+                Text(it, color = EcoGreenLight, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
+            }
+        }
+
+        if (HakotRepository.trucks.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No fleet trucks registered yet. Click 'Add New Truck' to add one.", fontSize = 12.sp, color = TextOnDarkSecondary)
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 20.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(HakotRepository.trucks) { tr ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${tr.truckCode} (${tr.plateNumber})",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextOnDarkPrimary
+                                )
+                                Surface(
+                                    color = EcoGreenContainer,
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, EcoGreenPrimary)
+                                ) {
+                                    Text(
+                                        text = "Active",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = EcoGreenLight,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("👤 Driver: ${tr.driverName}", fontSize = 12.sp, color = EcoGreenLight)
+                            Text("📍 Assigned Route: ${tr.assignedRoute}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                            Text("🏁 Destination: ${tr.destinationDumpsite}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    if (showAddTruckDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddTruckDialog = false },
+            title = { Text("Register New Fleet Truck", color = TextOnDarkPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = truckCodeInput,
+                        onValueChange = { truckCodeInput = it },
+                        label = { Text("Truck Code / Name (e.g. Hakot #4)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = plateNumberInput,
+                        onValueChange = { plateNumberInput = it },
+                        label = { Text("Plate Number (e.g. ABC-1234)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = driverNameInput,
+                        onValueChange = { driverNameInput = it },
+                        label = { Text("Assigned Driver Name") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (plateNumberInput.isNotBlank() && driverNameInput.isNotBlank()) {
+                            scope.launch {
+                                val newTruck = Dumptrack(
+                                    id = "tr_${System.currentTimeMillis()}",
+                                    truckCode = truckCodeInput.trim().ifBlank { "Hakot Truck" },
+                                    plateNumber = plateNumberInput.trim(),
+                                    driverName = driverNameInput.trim(),
+                                    assignedRoute = "Collection Route",
+                                    destinationDumpsite = "Nasugbu MRF Facility",
+                                    latitude = 14.0725,
+                                    longitude = 120.6335
+                                )
+                                val res = HakotRepository.saveTruckToSupabase(newTruck, context)
+                                if (res.first) {
+                                    successMsg = "Successfully registered truck '${newTruck.truckCode}' to Supabase!"
+                                    showAddTruckDialog = false
+                                } else {
+                                    successMsg = "Error saving truck: ${res.second}"
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Save to Database", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddTruckDialog = false }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
     }
 }
 
