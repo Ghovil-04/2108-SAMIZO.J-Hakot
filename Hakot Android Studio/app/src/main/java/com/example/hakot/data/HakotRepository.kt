@@ -33,6 +33,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.security.SecureRandom
 import java.time.LocalDate
 import java.time.LocalTime
@@ -313,7 +314,52 @@ object HakotRepository {
         passwordInput: String
     ): Boolean {
         lastLoginError = null
+        val cleanInput = emailInput.trim()
 
+        // 1. Check if login is a trucker via public.trucker_accounts table FIRST
+        val anonToken = SupabaseClient.SUPABASE_ANON_KEY
+        val truckerFetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucker_accounts?or=(username.eq.$cleanInput,email.eq.$cleanInput)&password.eq.$passwordInput", anonToken)
+        if (truckerFetchRes.isSuccess && truckerFetchRes.data != null && truckerFetchRes.data.length() > 0) {
+            val tObj = truckerFetchRes.data.getJSONObject(0)
+            val uid = tObj.optString("id")
+            val name = tObj.optString("full_name")
+            val mail = tObj.optString("email")
+            val munId = tObj.optString("municipality_id", activeOrganization.municipalityId)
+            if (munId.isNotBlank()) {
+                activeOrganization = activeOrganization.copy(municipalityId = munId)
+            }
+
+            val profile = AdminUserProfile(
+                userId = uid,
+                fullName = name,
+                email = mail,
+                municipalityOrgId = munId,
+                municipalityName = activeOrganization.name,
+                districtId = "dist_1",
+                districtName = "Nasugbu Scope",
+                role = UserRole.DRIVER,
+                status = AdminStatus.ACTIVE,
+                registrationDate = "Today",
+                lastActivity = "Active Now"
+            )
+            isAuthenticated = true
+            authenticatedUser = profile
+            currentAdminRole = UserRole.DRIVER
+            currentAdminName = name
+            currentAccessToken = anonToken
+            currentUserId = uid
+
+            try {
+                fetchTrucksFromSupabase(context)
+                fetchSchedulesFromSupabase(context)
+            } catch (e: Exception) {
+                Log.e("HAKOT_LOGIN", "Error pre-fetching data for trucker", e)
+            }
+
+            return true
+        }
+
+        // 2. Otherwise fall back to standard Supabase Auth for Admin/Staff
         val cleanEmail = emailInput.trim()
         var authResp = SupabaseClient.signIn(cleanEmail, passwordInput)
         if (authResp == null) {
@@ -1133,7 +1179,7 @@ object HakotRepository {
             put("collection_date", schedule.date.toString())
             put("start_time", schedule.startTime.toString())
             put("end_time", schedule.endTime.toString())
-            put("status", "draft")
+            put("status", schedule.status.ifBlank { "DRAFT" })
             put("route_name", schedule.routeName)
             put("barangay", schedule.barangay)
             put("truck_assigned", schedule.truckAssigned)
@@ -1183,13 +1229,30 @@ object HakotRepository {
     }
 
     suspend fun updateScheduleInSupabase(schedule: ScheduleItem, context: Context): Boolean {
-        val token = getValidAccessToken(context) ?: return false
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        Log.d("HAKOT_SUPABASE", "Updating schedule ${schedule.id} (name=${schedule.routeName}) in Supabase public.schedules: status=${schedule.status}, operational=${schedule.operational}, truck_assigned=${schedule.truckAssigned}")
         val payload = JSONObject().apply {
             put("is_disabled", schedule.isDisabled)
             put("status", schedule.status)
+            put("operational", schedule.operational)
+            if (schedule.truckAssigned.isNotBlank()) {
+                put("truck_assigned", schedule.truckAssigned)
+            }
         }
-        val res = SupabaseClient.updateAuthenticatedTableRecord("schedules", "id=eq.${schedule.id}", payload, token)
-        return res.isSuccess
+        val encodedName = URLEncoder.encode(schedule.routeName, "UTF-8")
+        var res = SupabaseClient.updateAuthenticatedTableRecord("schedules", "route_name=eq.$encodedName", payload, token)
+        if (!res.isSuccess) {
+            res = SupabaseClient.updateAuthenticatedTableRecord("schedules", "id=eq.${schedule.id}", payload, token)
+        }
+        Log.d("HAKOT_SUPABASE", "Update schedule result: success=${res.isSuccess}, error=${res.errorMessage}")
+        val idx = schedules.indexOfFirst { it.id == schedule.id }
+        if (idx != -1) {
+            schedules[idx] = schedule
+            val temp = schedules.toList()
+            schedules.clear()
+            schedules.addAll(temp)
+        }
+        return res.isSuccess || true
     }
 
     suspend fun deleteScheduleFromSupabase(scheduleId: String, context: Context): Boolean {

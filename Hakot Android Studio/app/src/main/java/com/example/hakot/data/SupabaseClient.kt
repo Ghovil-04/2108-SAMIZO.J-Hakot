@@ -162,6 +162,42 @@ object SupabaseClient {
             null
         }
 
+    suspend fun signUp(
+        email: String,
+        pass: String
+    ): AuthTokenResponse? = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
+        try {
+            val urlString = "$SUPABASE_URL/auth/v1/signup"
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("apikey", SUPABASE_ANON_KEY)
+                setRequestProperty("Content-Type", "application/json")
+                doOutput = true
+                connectTimeout = 15000
+                readTimeout = 15000
+            }
+            val payload = JSONObject().apply {
+                put("email", email)
+                put("password", pass)
+            }
+            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            if (code in 200..299) {
+                val jsonText = connection.inputStream.bufferedReader().use { it.readText() }
+                return@withContext parseAuthResponse(jsonText)
+            } else {
+                val err = readErrorStream(connection)
+                Log.e("HAKOT_AUTH", "signUp failed with HTTP $code: $err")
+            }
+        } catch (e: Exception) {
+            Log.e("HAKOT_AUTH", "signUp exception: ${e.message}")
+        } finally {
+            connection?.disconnect()
+        }
+        return@withContext null
+    }
+
     suspend fun refreshSession(refreshTokenInput: String): RefreshSessionResult =
         withContext(Dispatchers.IO) {
             if (refreshTokenInput.isBlank()) {

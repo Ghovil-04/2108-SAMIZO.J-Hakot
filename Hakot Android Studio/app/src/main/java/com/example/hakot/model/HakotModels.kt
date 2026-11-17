@@ -219,6 +219,7 @@ data class Dumptrack(
     var Destination: String = "Nasugbu MRF Facility",
     var isOnline: Boolean = true,
     var driverName: String = "Unassigned Driver",
+    var assignedDriverId: String? = null,
     var speed: Int = 22,
     var latitude: Double = 14.0725,
     var longitude: Double = 120.6335,
@@ -333,6 +334,7 @@ data class ScheduleItem(
     val isWeeklyRepeat: Boolean = false,
     val recurrenceEndDate: LocalDate? = null,
     val isDisabled: Boolean = false,
+    var operational: Boolean = true,
     val orderedSegments: List<GisRoadSegmentFeature> = emptyList()
 )
 

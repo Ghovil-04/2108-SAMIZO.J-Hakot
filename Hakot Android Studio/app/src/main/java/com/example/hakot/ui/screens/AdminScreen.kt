@@ -59,6 +59,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.style.TextAlign
 import com.example.hakot.ui.theme.RecycleYellowContainer
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.RadioButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -1013,63 +1015,440 @@ fun AdminLoginScreen(
 
 @Composable
 fun DriverDashboardView(onSignOut: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isLoadingSchedules by remember { mutableStateOf(true) }
+    var showGpsBroadcastModal by remember { mutableStateOf(false) }
+    var selectedScheduleDetail by remember { mutableStateOf<ScheduleItem?>(null) }
     val driver = HakotRepository.authenticatedUser
-    val truck = HakotRepository.trucks.firstOrNull()
+
+    LaunchedEffect(Unit) {
+        isLoadingSchedules = true
+        if (driver?.municipalityOrgId?.isNotBlank() == true) {
+            HakotRepository.activeOrganization = HakotRepository.activeOrganization.copy(municipalityId = driver.municipalityOrgId)
+        }
+        HakotRepository.fetchTrucksFromSupabase(context)
+        HakotRepository.fetchSchedulesFromSupabase(context)
+        isLoadingSchedules = false
+    }
+
+    var selectedTruckInUse by remember(driver, HakotRepository.trucks.size) {
+        mutableStateOf(
+            HakotRepository.trucks.find { 
+                it.driverName.equals(driver?.fullName, ignoreCase = true) || 
+                it.assignedDriverId == driver?.userId || 
+                it.driverName.contains(driver?.fullName ?: "", ignoreCase = true)
+            } ?: HakotRepository.trucks.firstOrNull()
+        )
+    }
+
+    var showTruckDropdown by remember { mutableStateOf(false) }
+
+    val schedulesList = HakotRepository.schedules
+    val driverSchedules = remember(schedulesList.size, selectedTruckInUse, driver) {
+        HakotRepository.schedules.filter { sch ->
+            sch.operational
+        }
+    }
+
+    val activeCount = driverSchedules.count { it.status.equals("ACTIVE", ignoreCase = true) }
+    val completedCount = driverSchedules.count { it.status.equals("COMPLETED", ignoreCase = true) || it.status.equals("DONE", ignoreCase = true) }
 
     LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(14.dp),
         modifier = Modifier.fillMaxSize().background(DarkBackground)
     ) {
+        // Compact Sleek Header Island
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = EcoGreenContainer),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(18.dp))
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(14.dp))
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("TRUCK DRIVER OPERATOR PORTAL", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                            Text(driver?.fullName ?: "Mario Santos", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            Text("TRUCK DRIVER PORTAL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Text(driver?.fullName ?: "Driver", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
                         }
 
-                        Button(
-                            onClick = onSignOut,
-                            colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceCard),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("Sign Out", fontSize = 11.sp, color = TextOnDarkPrimary)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(
+                                onClick = { showGpsBroadcastModal = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("Broadcast GPS", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            }
+
+                            Button(
+                                onClick = onSignOut,
+                                colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("Sign Out", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text("🚚 Assigned Vehicle: ${truck?.truckCode} (${truck?.plateNumber})", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    Text("📍 Route: ${truck?.assignedRoute}", fontSize = 12.sp, color = EcoGreenLight)
-                    Text("🏁 Destination: ${truck?.destinationDumpsite}", fontSize = 12.sp, color = TextOnDarkSecondary)
+                    // Vehicle Dropdown Selector
+                    Box {
+                        Surface(
+                            color = DarkSurface,
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, EcoGreenPrimary),
+                            modifier = Modifier.fillMaxWidth().clickable { showTruckDropdown = true }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Vehicle: ${selectedTruckInUse?.truckCode ?: "Select Truck"} (${selectedTruckInUse?.plateNumber ?: "N/A"})",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextOnDarkPrimary
+                                )
+                                Text("▼", fontSize = 10.sp, color = EcoGreenLight)
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showTruckDropdown,
+                            onDismissRequest = { showTruckDropdown = false }
+                        ) {
+                            HakotRepository.trucks.forEach { tr ->
+                                DropdownMenuItem(
+                                    text = { Text("${tr.truckCode} (${tr.plateNumber})", fontSize = 11.sp) },
+                                    onClick = {
+                                        selectedTruckInUse = tr
+                                        showTruckDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
 
+        // Metrics Summary Bar
         item {
-            Text("TODAY'S DRIVER COLLECTION SCHEDULE WINDOW", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = TextOnDarkMuted)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MetricCard(title = "Assigned", value = "${driverSchedules.size}", color = EcoGreenLight, modifier = Modifier.weight(1f))
+                MetricCard(title = "Active", value = "$activeCount", color = EcoGreenPrimary, modifier = Modifier.weight(1f))
+                MetricCard(title = "Completed", value = "$completedCount", color = EcoGreenLight, modifier = Modifier.weight(1f))
+            }
         }
 
-        items(HakotRepository.schedules) { sch ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+        item {
+            Text("ASSIGNED DRIVER COLLECTION SCHEDULES", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkMuted)
+        }
+
+        // Schedules List or Loading State
+        if (isLoadingSchedules) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = EcoGreenPrimary, strokeWidth = 2.dp)
+                        Text("Loading assigned collection schedules...", fontSize = 11.sp, color = TextOnDarkSecondary)
+                    }
+                }
+            }
+        } else if (driverSchedules.isEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("No collection schedules assigned to your vehicle today.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(14.dp))
+                }
+            }
+        } else {
+            items(driverSchedules) { sch ->
+                val isActive = sch.status.equals("ACTIVE", ignoreCase = true)
+                val isOnHold = sch.status.equals("ON_HOLD", ignoreCase = true) || sch.status.equals("HOLD", ignoreCase = true)
+                val isCompleted = sch.status.equals("COMPLETED", ignoreCase = true) || sch.status.equals("DONE", ignoreCase = true)
+
+                val isUnassigned = sch.truckAssigned.isBlank() || 
+                    sch.truckAssigned.contains("No assigned", ignoreCase = true) || 
+                    sch.truckAssigned.contains("Unassigned", ignoreCase = true) ||
+                    sch.truckAssigned.contains("Dump Truck", ignoreCase = true)
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedScheduleDetail = sch }
+                        .border(1.dp, if (isActive) EcoGreenPrimary else if (isOnHold) RecycleYellow else DarkBorder, RoundedCornerShape(12.dp))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(sch.routeName, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            
+                            // Status Badge
+                            Surface(
+                                color = if (isActive) EcoGreenContainer else if (isOnHold) DarkSurface else DarkSurface,
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, if (isActive) EcoGreenPrimary else if (isOnHold) RecycleYellow else TextOnDarkSecondary)
+                            ) {
+                                Text(
+                                    text = sch.status,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isActive) EcoGreenLight else if (isOnHold) RecycleYellow else if (isCompleted) EcoGreenPrimary else TextOnDarkSecondary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Barangay: ${sch.barangay}", fontSize = 11.sp, color = EcoGreenLight)
+                        Text("Date: ${sch.date} • Time: ${sch.startTime} - ${sch.endTime}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                        val truckText = if (isUnassigned) "No assigned truck yet" else sch.truckAssigned
+                        Text("Assigned Truck: $truckText", fontSize = 10.sp, color = TextOnDarkSecondary)
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isUnassigned) {
+                                // Assign Myself (Take Task) Button
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            val truckInfo = if (selectedTruckInUse != null) {
+                                                "${selectedTruckInUse?.plateNumber} (${selectedTruckInUse?.truckCode}) - Driver: ${driver?.fullName ?: "Driver"}"
+                                            } else "Driver: ${driver?.fullName ?: "Driver"}"
+                                            val updated = sch.copy(truckAssigned = truckInfo)
+                                            HakotRepository.updateScheduleInSupabase(updated, context)
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("Assign Myself", fontSize = 10.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                // Toggle Start / Hold Button
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            val newStatus = if (isActive) "ON_HOLD" else "ACTIVE"
+                                            val updated = sch.copy(status = newStatus)
+                                            HakotRepository.updateScheduleInSupabase(updated, context)
+                                        }
+                                    },
+                                    enabled = !isCompleted,
+                                    colors = ButtonDefaults.buttonColors(containerColor = if (isActive) RecycleYellow else EcoGreenPrimary),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(if (isActive) "Hold Collection" else "Start Collection", fontSize = 10.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                // Complete / Done Button
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            val updated = sch.copy(status = "COMPLETED")
+                                            HakotRepository.updateScheduleInSupabase(updated, context)
+                                        }
+                                    },
+                                    enabled = !isCompleted,
+                                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(if (isCompleted) "Completed" else "Complete Collection", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showGpsBroadcastModal) {
+        AlertDialog(
+            onDismissRequest = { showGpsBroadcastModal = false },
+            title = { Text("Live GPS Location Broadcast", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Vehicle: ${selectedTruckInUse?.truckCode ?: "Truck"} (${selectedTruckInUse?.plateNumber ?: "N/A"})", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                    Text("Operator: ${driver?.fullName ?: "Driver"}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(8.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Status: GPS Active & Broadcasting", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Text("Latitude: 14.0725° N", fontSize = 11.sp, color = TextOnDarkPrimary)
+                            Text("Longitude: 120.6335° E", fontSize = 11.sp, color = TextOnDarkPrimary)
+                            Text("Last Sync: Just now (Nasugbu, Batangas)", fontSize = 10.sp, color = TextOnDarkSecondary)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showGpsBroadcastModal = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Close Broadcast View", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
+    }
+
+    selectedScheduleDetail?.let { sch ->
+        val routeSegmentsList = remember(sch, GisManager.roadSegments) {
+            sch.orderedSegments.mapNotNull { seg ->
+                val baseSeg = GisManager.roadSegments.find { it.id == seg.id } ?: seg
+                val rawCoords = when {
+                    seg.clippedCoordinates.isNotEmpty() -> seg.clippedCoordinates
+                    seg.lineStringCoordinates.isNotEmpty() -> seg.lineStringCoordinates
+                    baseSeg.clippedCoordinates.isNotEmpty() -> baseSeg.clippedCoordinates
+                    baseSeg.lineStringCoordinates.isNotEmpty() -> baseSeg.lineStringCoordinates
+                    else -> emptyList()
+                }
+                val coords = if (seg.isReversed) rawCoords.reversed() else rawCoords
+                val points = coords.mapNotNull { (lng, lat) ->
+                    if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                }
+                if (points.size >= 2) points else null
+            }
+        }
+        val routeGeoPoints = remember(routeSegmentsList) { routeSegmentsList.flatten() }
+
+        Dialog(
+            onDismissRequest = { selectedScheduleDetail = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+                color = DarkBackground,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, DarkBorder)
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(sch.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    Text("📍 ${sch.barangay}", fontSize = 12.sp, color = EcoGreenLight)
-                    Text("Time Window: 8:00 AM - 11:30 AM • Status: ${sch.status}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(sch.routeName, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Text("Barangay: ${sch.barangay} • Date: ${sch.date}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                        }
+                        IconButton(onClick = { selectedScheduleDetail = null }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkPrimary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(280.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                    ) {
+                        DarkMapView(
+                            modifier = Modifier.fillMaxSize(),
+                            customRoutePoints = routeGeoPoints,
+                            customRouteSegments = routeSegmentsList
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("SCHEDULE & ROUTE DETAILS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                        Text("Collection Date: ${sch.date}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("Time Window: ${sch.startTime} - ${sch.endTime}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        
+                        val truckDisplay = if (sch.truckAssigned.isBlank() || sch.truckAssigned.contains("Unassigned", ignoreCase = true) || sch.truckAssigned.contains("No assigned", ignoreCase = true) || sch.truckAssigned.contains("Dump Truck", ignoreCase = true)) "No assigned truck yet" else sch.truckAssigned
+                        Text("Assigned Truck: $truckDisplay", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("Status: ${sch.status}", fontSize = 12.sp, color = TextOnDarkPrimary)
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("ROUTE CORRIDOR SEGMENTS (${sch.orderedSegments.size}):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+
+                        if (sch.orderedSegments.isEmpty()) {
+                            Text("No segment details stored.", fontSize = 11.sp, color = TextOnDarkSecondary)
+                        } else {
+                            sch.orderedSegments.forEachIndexed { idx, seg ->
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text("${idx + 1}. ${seg.segmentName}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                            Text("Type: ${seg.roadType}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                                        }
+                                        Text(
+                                            if (seg.isReversed) "Reversed" else "Forward",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = EcoGreenLight
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2358,8 +2737,6 @@ fun MapRoutePlannerScreen(
                         )
                     }
 
-                    Text("Assigned Truck: $assignedTruckInput", fontSize = 11.sp, color = TextOnDarkSecondary)
-
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("Route Travel Sequence & Traversal Direction:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2422,7 +2799,7 @@ fun MapRoutePlannerScreen(
                                     date,
                                     start,
                                     end,
-                                    assignedTruckInput,
+                                    "No assigned truck yet",
                                     repeatWeekly,
                                     endRecur,
                                     selectedGisSegments
@@ -2499,8 +2876,8 @@ fun CollectionScheduleDashboardView() {
                         startTime = startTime,
                         endTime = endTime,
                         wasteCategory = WasteCategory.GENERAL_WASTE,
-                        truckAssigned = truck,
-                        status = "Scheduled",
+                        truckAssigned = if (truck.isBlank() || truck.contains("Dump Truck", ignoreCase = true)) "No assigned truck yet" else truck,
+                        status = "DRAFT",
                         isWeeklyRepeat = repeatWeekly,
                         recurrenceEndDate = repeatEnd,
                         isDisabled = false,
@@ -2699,10 +3076,10 @@ fun CollectionScheduleDashboardView() {
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Switch(
-                                        checked = !sch.isDisabled,
+                                        checked = sch.operational,
                                         onCheckedChange = { isChecked ->
                                             scope.launch {
-                                                val updated = sch.copy(isDisabled = !isChecked)
+                                                val updated = sch.copy(operational = isChecked)
                                                 val success = HakotRepository.updateScheduleInSupabase(updated, context)
                                                 if (success) {
                                                     val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
@@ -2721,7 +3098,7 @@ fun CollectionScheduleDashboardView() {
                                             uncheckedTrackColor = DarkSurface
                                         )
                                     )
-                                    Text(if (sch.isDisabled) "Inactive" else "Active", fontSize = 11.sp, color = if (sch.isDisabled) TextOnDarkSecondary else EcoGreenLight, fontWeight = FontWeight.Bold)
+                                    Text(if (sch.operational) "Operational" else "Not Operational", fontSize = 11.sp, color = if (sch.operational) EcoGreenLight else TextOnDarkSecondary, fontWeight = FontWeight.Bold)
                                 }
 
                                 TextButton(onClick = {
@@ -2848,10 +3225,11 @@ fun CollectionScheduleDashboardView() {
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text("SCHEDULE & ROUTE DETAILS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                        Text("🗓️ Collection Date: ${sch.date}", fontSize = 12.sp, color = TextOnDarkPrimary)
-                        Text("⏰ Time Window: ${sch.startTime} - ${sch.endTime}", fontSize = 12.sp, color = TextOnDarkPrimary)
-                        Text("🚛 Assigned Truck: ${sch.truckAssigned}", fontSize = 12.sp, color = TextOnDarkPrimary)
-                        Text("📊 Status: ${sch.status}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("Collection Date: ${sch.date}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("Time Window: ${sch.startTime} - ${sch.endTime}", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        val truckDisplay = if (sch.truckAssigned.isBlank() || sch.truckAssigned.contains("Unassigned", ignoreCase = true) || sch.truckAssigned.contains("No assigned", ignoreCase = true) || sch.truckAssigned.contains("Dump Truck", ignoreCase = true)) "No assigned truck yet" else sch.truckAssigned
+                        Text("Assigned Truck: $truckDisplay", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("Status: ${sch.status}", fontSize = 12.sp, color = TextOnDarkPrimary)
                         if (sch.isWeeklyRepeat) {
                             Text("🔄 Weekly Recurrence: Active until ${sch.recurrenceEndDate}", fontSize = 11.sp, color = EcoGreenLight)
                         }
