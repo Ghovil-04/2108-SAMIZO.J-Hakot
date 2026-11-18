@@ -1,10 +1,14 @@
 package com.example.hakot.ui.screens
 
+import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.text.format.DateFormat
@@ -112,8 +116,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.core.app.ActivityCompat
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -1020,6 +1026,7 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
     var isLoadingSchedules by remember { mutableStateOf(true) }
     var showGpsBroadcastModal by remember { mutableStateOf(false) }
     var selectedScheduleDetail by remember { mutableStateOf<ScheduleItem?>(null) }
+    var scheduleToStartFromAssignedConfirm by remember { mutableStateOf<ScheduleItem?>(null) }
     val driver = HakotRepository.authenticatedUser
 
     LaunchedEffect(Unit) {
@@ -1043,16 +1050,70 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
     }
 
     var showTruckDropdown by remember { mutableStateOf(false) }
+    var driverSubTab by remember { mutableIntStateOf(0) } // 0=All, 1=Unassigned, 2=Assigned, 3=Active, 4=Completed, 5=Missed
+    var hiddenCompletedFromDayViewIds by remember { mutableStateOf(setOf<String>()) }
+    val zoneId = ZoneId.of("Asia/Manila")
+    var selectedWeekStart by remember { mutableStateOf(LocalDate.now(zoneId).with(DayOfWeek.MONDAY)) }
+    var selectedDay by remember { mutableStateOf<LocalDate?>(LocalDate.now(zoneId)) }
 
-    val schedulesList = HakotRepository.schedules
-    val driverSchedules = remember(schedulesList.size, selectedTruckInUse, driver) {
-        HakotRepository.schedules.filter { sch ->
-            sch.operational
-        }
+    val daysOfWeek = (0..6).map { selectedWeekStart.plusDays(it.toLong()) }
+    val today = LocalDate.now(zoneId)
+
+    val allDriverSchedules = HakotRepository.schedules.filter { sch ->
+        sch.operational
+    }.sortedWith(compareBy({ it.date }, { it.startTime }))
+
+    val unassignedSchedules = allDriverSchedules.filter { 
+        val st = it.status.uppercase()
+        (st == "DRAFT" || st == "SCHEDULED" || st.isBlank() || it.truckAssigned.contains("No assigned", ignoreCase = true) || it.truckAssigned.contains("Unassigned", ignoreCase = true)) && st != "ASSIGNED"
+    }
+    val assignedSchedules = allDriverSchedules.filter { 
+        it.status.equals("ASSIGNED", ignoreCase = true)
+    }
+    val activeDriverSchedules = allDriverSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "ACTIVE" || st == "ON_HOLD" || st == "HOLD" || st == "ON HOLD"
+    }
+    val completedDriverSchedules = allDriverSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "COMPLETED" || st == "DONE" || st == "COMPLETE"
+    }
+    val missedDriverSchedules = allDriverSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "MISSED" || (it.date.isBefore(today) && !completedDriverSchedules.contains(it) && !it.isWeeklyRepeat)
     }
 
-    val activeCount = driverSchedules.count { it.status.equals("ACTIVE", ignoreCase = true) }
-    val completedCount = driverSchedules.count { it.status.equals("COMPLETED", ignoreCase = true) || it.status.equals("DONE", ignoreCase = true) }
+    val currentFilterTitle = when (driverSubTab) {
+        1 -> "DRAFT"
+        2 -> "ASSIGNED"
+        3 -> "ACTIVE"
+        4 -> "COMPLETED"
+        5 -> "MISSED"
+        else -> if (selectedDay != null) "FOR $selectedDay" else "ALL SCHEDULES"
+    }
+
+    val driverSchedules = allDriverSchedules.filter { sch ->
+        val matchesDay = if (driverSubTab != 0) {
+            true
+        } else {
+            (selectedDay == null || HakotRepository.isScheduleActiveOnDate(sch, selectedDay!!)) && !hiddenCompletedFromDayViewIds.contains(sch.id)
+        }
+        val matchesTab = when (driverSubTab) {
+            1 -> unassignedSchedules.contains(sch)
+            2 -> assignedSchedules.contains(sch)
+            3 -> activeDriverSchedules.contains(sch)
+            4 -> completedDriverSchedules.contains(sch)
+            5 -> missedDriverSchedules.contains(sch)
+            else -> true
+        }
+        matchesDay && matchesTab
+    }
+
+    val unassignedCount = unassignedSchedules.size
+    val assignedCount = assignedSchedules.size
+    val activeCount = activeDriverSchedules.size
+    val completedCount = completedDriverSchedules.size
+    val missedCount = missedDriverSchedules.size
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1077,14 +1138,27 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                             Text(driver?.fullName ?: "Driver", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
                         }
 
+                        val hasAssignedOrActiveSchedule = HakotRepository.schedules.any { sch ->
+                            sch.operational && (sch.status.equals("ASSIGNED", ignoreCase = true) || sch.status.equals("ACTIVE", ignoreCase = true))
+                        }
+
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(
                                 onClick = { showGpsBroadcastModal = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                enabled = hasAssignedOrActiveSchedule,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = EcoGreenPrimary,
+                                    disabledContainerColor = DarkSurface
+                                ),
                                 shape = RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("Broadcast GPS", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                                Text(
+                                    "Broadcast GPS",
+                                    color = if (hasAssignedOrActiveSchedule) Color.Black else TextOnDarkSecondary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
                             }
 
                             Button(
@@ -1140,20 +1214,98 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
             }
         }
 
-        // Metrics Summary Bar
+        // Interactive Status Metrics Bar (Unassigned, Assigned, Active, Completed, Missed)
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                MetricCard(title = "Assigned", value = "${driverSchedules.size}", color = EcoGreenLight, modifier = Modifier.weight(1f))
-                MetricCard(title = "Active", value = "$activeCount", color = EcoGreenPrimary, modifier = Modifier.weight(1f))
-                MetricCard(title = "Completed", value = "$completedCount", color = EcoGreenLight, modifier = Modifier.weight(1f))
+                MetricCard(
+                    title = "Draft",
+                    value = "$unassignedCount",
+                    color = TextOnDarkPrimary,
+                    modifier = Modifier.weight(1f).clickable { driverSubTab = if (driverSubTab == 1) 0 else 1 }
+                )
+                MetricCard(
+                    title = "Assigned",
+                    value = "$assignedCount",
+                    color = EcoGreenLight,
+                    modifier = Modifier.weight(1f).clickable { driverSubTab = if (driverSubTab == 2) 0 else 2 }
+                )
+                MetricCard(
+                    title = "Active",
+                    value = "$activeCount",
+                    color = EcoGreenPrimary,
+                    modifier = Modifier.weight(1f).clickable { driverSubTab = if (driverSubTab == 3) 0 else 3 }
+                )
+                MetricCard(
+                    title = "Completed",
+                    value = "$completedCount",
+                    color = EcoGreenLight,
+                    modifier = Modifier.weight(1f).clickable { driverSubTab = if (driverSubTab == 4) 0 else 4 }
+                )
+                MetricCard(
+                    title = "Missed",
+                    value = "$missedCount",
+                    color = HazardousRed,
+                    modifier = Modifier.weight(1f).clickable { driverSubTab = if (driverSubTab == 5) 0 else 5 }
+                )
+            }
+        }
+
+        // WEEKLY CALENDAR WIDGET FOR TRUCKER (Pic 3)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { selectedWeekStart = selectedWeekStart.minusWeeks(1) }) {
+                            Text("◀ Prev Week", fontSize = 11.sp, color = EcoGreenLight)
+                        }
+                        Text("Week of ${selectedWeekStart}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                        TextButton(onClick = { selectedWeekStart = selectedWeekStart.plusWeeks(1) }) {
+                            Text("Next Week ▶", fontSize = 11.sp, color = EcoGreenLight)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        daysOfWeek.forEach { day ->
+                            val isSelected = selectedDay == day
+                            val hasSchedules = HakotRepository.schedules.any {
+                                it.operational && HakotRepository.isScheduleActiveOnDate(it, day)
+                            }
+
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) EcoGreenPrimary else if (hasSchedules) EcoGreenContainer else DarkSurface)
+                                    .clickable { 
+                                        selectedDay = if (isSelected) null else day 
+                                        driverSubTab = 0
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(day.dayOfWeek.name.take(3), fontSize = 10.sp, color = if (isSelected) Color.Black else TextOnDarkSecondary)
+                                Text("${day.dayOfMonth}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (isSelected) Color.Black else TextOnDarkPrimary)
+                            }
+                        }
+                    }
+                }
             }
         }
 
         item {
-            Text("ASSIGNED DRIVER COLLECTION SCHEDULES", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkMuted)
+            Text("DRIVER COLLECTION SCHEDULES — VIEWING $currentFilterTitle", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkMuted)
         }
 
         // Schedules List or Loading State
@@ -1179,9 +1331,11 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
                 ) {
-                    Text("No collection schedules assigned to your vehicle today.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(14.dp))
+                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        Text("No $currentFilterTitle collection schedules found.", fontSize = 12.sp, color = TextOnDarkSecondary, textAlign = TextAlign.Center)
+                    }
                 }
             }
         } else {
@@ -1239,16 +1393,26 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isUnassigned) {
-                                // Assign Myself (Take Task) Button
+                            if (isUnassigned || sch.status.equals("DRAFT", ignoreCase = true)) {
+                                // Assign Myself Button (DRAFT -> ASSIGNED)
                                 Button(
                                     onClick = {
                                         scope.launch {
                                             val truckInfo = if (selectedTruckInUse != null) {
                                                 "${selectedTruckInUse?.plateNumber} (${selectedTruckInUse?.truckCode}) - Driver: ${driver?.fullName ?: "Driver"}"
                                             } else "Driver: ${driver?.fullName ?: "Driver"}"
-                                            val updated = sch.copy(truckAssigned = truckInfo)
-                                            HakotRepository.updateScheduleInSupabase(updated, context)
+                                            val updated = sch.copy(status = "ASSIGNED", truckAssigned = truckInfo)
+                                            val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                            if (success) {
+                                                val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                                if (idx != -1) {
+                                                    HakotRepository.schedules[idx] = updated
+                                                    val temp = HakotRepository.schedules.toList()
+                                                    HakotRepository.schedules.clear()
+                                                    HakotRepository.schedules.addAll(temp)
+                                                }
+                                                Toast.makeText(context, "Schedule assigned! Status is now ASSIGNED.", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
@@ -1261,10 +1425,24 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                 // Toggle Start / Hold Button
                                 Button(
                                     onClick = {
-                                        scope.launch {
-                                            val newStatus = if (isActive) "ON_HOLD" else "ACTIVE"
-                                            val updated = sch.copy(status = newStatus)
-                                            HakotRepository.updateScheduleInSupabase(updated, context)
+                                        if (sch.status.equals("ASSIGNED", ignoreCase = true)) {
+                                            scheduleToStartFromAssignedConfirm = sch
+                                        } else {
+                                            scope.launch {
+                                                val newStatus = if (isActive) "ON_HOLD" else "ACTIVE"
+                                                val updated = sch.copy(status = newStatus)
+                                                val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                                if (success) {
+                                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                                    if (idx != -1) {
+                                                        HakotRepository.schedules[idx] = updated
+                                                        val temp = HakotRepository.schedules.toList()
+                                                        HakotRepository.schedules.clear()
+                                                        HakotRepository.schedules.addAll(temp)
+                                                    }
+                                                    Toast.makeText(context, "Status updated to $newStatus", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
                                         }
                                     },
                                     enabled = !isCompleted,
@@ -1282,7 +1460,17 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                     onClick = {
                                         scope.launch {
                                             val updated = sch.copy(status = "COMPLETED")
-                                            HakotRepository.updateScheduleInSupabase(updated, context)
+                                            val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                            if (success) {
+                                                val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                                if (idx != -1) {
+                                                    HakotRepository.schedules[idx] = updated
+                                                    val temp = HakotRepository.schedules.toList()
+                                                    HakotRepository.schedules.clear()
+                                                    HakotRepository.schedules.addAll(temp)
+                                                }
+                                                Toast.makeText(context, "Collection marked as COMPLETED!", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     },
                                     enabled = !isCompleted,
@@ -1292,6 +1480,19 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                 ) {
                                     Text(if (isCompleted) "Completed" else "Complete Collection", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
                                 }
+
+                                if (isCompleted && driverSubTab == 0) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    TextButton(
+                                        onClick = {
+                                            hiddenCompletedFromDayViewIds = hiddenCompletedFromDayViewIds + sch.id
+                                            Toast.makeText(context, "Hidden from day view (still visible in Completed filter)", Toast.LENGTH_SHORT).show()
+                                        },
+                                        contentPadding = PaddingValues(2.dp)
+                                    ) {
+                                        Text("Hide ✕", fontSize = 10.sp, color = TextOnDarkSecondary)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1300,39 +1501,150 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
         }
     }
 
-    if (showGpsBroadcastModal) {
+    scheduleToStartFromAssignedConfirm?.let { sch ->
         AlertDialog(
-            onDismissRequest = { showGpsBroadcastModal = false },
-            title = { Text("Live GPS Location Broadcast", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Vehicle: ${selectedTruckInUse?.truckCode ?: "Truck"} (${selectedTruckInUse?.plateNumber ?: "N/A"})", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    Text("Operator: ${driver?.fullName ?: "Driver"}", fontSize = 11.sp, color = TextOnDarkSecondary)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(8.dp))
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Status: GPS Active & Broadcasting", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                            Text("Latitude: 14.0725° N", fontSize = 11.sp, color = TextOnDarkPrimary)
-                            Text("Longitude: 120.6335° E", fontSize = 11.sp, color = TextOnDarkPrimary)
-                            Text("Last Sync: Just now (Nasugbu, Batangas)", fontSize = 10.sp, color = TextOnDarkSecondary)
-                        }
-                    }
-                }
-            },
+            onDismissRequest = { scheduleToStartFromAssignedConfirm = null },
+            title = { Text("Confirm Start Collection", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to start collection for route '${sch.routeName}'? This will set the schedule status from ASSIGNED to ACTIVE.", color = TextOnDarkSecondary) },
             confirmButton = {
                 Button(
-                    onClick = { showGpsBroadcastModal = false },
+                    onClick = {
+                        scope.launch {
+                            val updated = sch.copy(status = "ACTIVE")
+                            val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                            if (success) {
+                                val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                if (idx != -1) {
+                                    HakotRepository.schedules[idx] = updated
+                                    val temp = HakotRepository.schedules.toList()
+                                    HakotRepository.schedules.clear()
+                                    HakotRepository.schedules.addAll(temp)
+                                }
+                                Toast.makeText(context, "Started collection for ${sch.routeName}!", Toast.LENGTH_SHORT).show()
+                            }
+                            scheduleToStartFromAssignedConfirm = null
+                        }
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
                 ) {
-                    Text("Close Broadcast View", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Text("Confirm & Start", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { scheduleToStartFromAssignedConfirm = null }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
                 }
             },
             containerColor = DarkSurfaceCard
         )
+    }
+
+    if (showGpsBroadcastModal) {
+        var liveLat by remember { mutableStateOf(14.0725) }
+        var liveLon by remember { mutableStateOf(120.6335) }
+
+        DisposableEffect(context) {
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val listener = LocationListener { loc ->
+                liveLat = loc.latitude
+                liveLon = loc.longitude
+            }
+
+            try {
+                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    val lastLoc = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                        ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                    if (lastLoc != null) {
+                        liveLat = lastLoc.latitude
+                        liveLon = lastLoc.longitude
+                    }
+                    locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, listener)
+                    locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 1000L, 1f, listener)
+                }
+            } catch (e: Exception) {
+                Log.e("HAKOT_GPS", "Error getting live location", e)
+            }
+
+            onDispose {
+                try {
+                    locationManager.removeUpdates(listener)
+                } catch (_: Exception) {}
+            }
+        }
+
+        val currentGpsPoint = GeoPoint(liveLat, liveLon)
+        val currentGpsList = listOf(currentGpsPoint)
+
+        Dialog(
+            onDismissRequest = { showGpsBroadcastModal = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .padding(12.dp),
+                color = DarkBackground,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, EcoGreenPrimary)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("LIVE GPS BROADCAST", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Text("Phone Current Location (Live)", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                        }
+                        IconButton(onClick = { showGpsBroadcastModal = false }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkPrimary)
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                    ) {
+                        DarkMapView(
+                            modifier = Modifier.fillMaxSize(),
+                            customRoutePoints = currentGpsList
+                        )
+                    }
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(10.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Vehicle: ${selectedTruckInUse?.truckCode ?: "Truck"} (${selectedTruckInUse?.plateNumber ?: "N/A"})", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            Text("Operator: ${driver?.fullName ?: "Driver"}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                            Text("Status: GPS Active & Broadcasting Live", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Text("Latitude: ${String.format("%.4f", liveLat)}° N • Longitude: ${String.format("%.4f", liveLon)}° E", fontSize = 11.sp, color = TextOnDarkPrimary)
+                            Text("Location Source: Live Device/Emulator GPS", fontSize = 10.sp, color = TextOnDarkSecondary)
+                        }
+                    }
+
+                    Button(
+                        onClick = { showGpsBroadcastModal = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Close Location View", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
     }
 
     selectedScheduleDetail?.let { sch ->
@@ -2855,7 +3167,7 @@ fun CollectionScheduleDashboardView() {
 
     val schedulesForSelectedDay = HakotRepository.schedules.filter {
         HakotRepository.isScheduleActiveOnDate(it, selectedDay)
-    }
+    }.sortedWith(compareBy({ it.date }, { it.startTime }))
 
     if (showSchedulePlanner) {
         val scope = rememberCoroutineScope()

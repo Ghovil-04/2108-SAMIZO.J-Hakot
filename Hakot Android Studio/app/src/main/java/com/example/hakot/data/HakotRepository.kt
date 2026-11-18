@@ -29,6 +29,9 @@ import com.example.hakot.model.ScheduleItem
 import com.example.hakot.model.TruckStatus
 import com.example.hakot.model.UserRole
 import com.example.hakot.model.WasteCategory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -226,6 +229,9 @@ object HakotRepository {
     }
 
     suspend fun getValidAccessToken(context: Context): String? = refreshMutex.withLock {
+        if (currentAdminRole == UserRole.DRIVER) {
+            return@withLock SupabaseClient.SUPABASE_ANON_KEY
+        }
         if (currentAccessToken.isNullOrBlank() || currentUserId.isNullOrBlank()) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val sessionManager = SessionManager(context)
@@ -350,8 +356,10 @@ object HakotRepository {
             currentUserId = uid
 
             try {
-                fetchTrucksFromSupabase(context)
-                fetchSchedulesFromSupabase(context)
+                CoroutineScope(Dispatchers.IO).launch {
+                    fetchTrucksFromSupabase(context)
+                    fetchSchedulesFromSupabase(context)
+                }
             } catch (e: Exception) {
                 Log.e("HAKOT_LOGIN", "Error pre-fetching data for trucker", e)
             }
@@ -1275,13 +1283,12 @@ object HakotRepository {
 
     suspend fun fetchSchedulesFromSupabase(context: Context): Boolean {
         val token = getValidAccessToken(context) ?: return false
-        if (!GisManager.isLoaded || GisManager.roadSegments.isEmpty()) {
-            Log.d("HAKOT_ROUTE", "GIS data not loaded yet. Awaiting GisManager.loadGisData()...")
-            GisManager.loadGisData()
-        }
-        Log.d("HAKOT_ROUTE", "GIS data loaded. roadSegments size: ${GisManager.roadSegments.size}")
+        Log.d("HAKOT_ROUTE", "Fetching schedules from Supabase...")
 
-        val fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("schedules?municipality_id=eq.${activeOrganization.municipalityId}", token)
+        var fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("schedules?municipality_id=eq.${activeOrganization.municipalityId}", token)
+        if (!fetchRes.isSuccess || fetchRes.data == null || fetchRes.data.length() == 0) {
+            fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("schedules?select=*", token)
+        }
         if (fetchRes.isSuccess && fetchRes.data != null) {
             try {
                 val array = fetchRes.data
@@ -1365,6 +1372,32 @@ object HakotRepository {
                     val rawEndRecur = if (obj.has("recurrence_end_date") && !obj.isNull("recurrence_end_date")) obj.getString("recurrence_end_date").take(10) else null
                     val parsedEndRecur = if (!rawEndRecur.isNullOrBlank()) try { LocalDate.parse(rawEndRecur) } catch (_: Exception) { null } else null
 
+                    val rawStatus = obj.optString("status", "Scheduled")
+                    val isWeeklyRepeat = obj.optBoolean("is_weekly_repeat", false)
+                    val isPastDate = parsedDate.isBefore(LocalDate.now())
+                    val isCompleted = rawStatus.equals("COMPLETED", ignoreCase = true) || rawStatus.equals("DONE", ignoreCase = true) || rawStatus.equals("COMPLETE", ignoreCase = true)
+                    val isAlreadyMissed = rawStatus.equals("MISSED", ignoreCase = true)
+
+                    val computedStatus = if (isPastDate && !isWeeklyRepeat && !isCompleted && !isAlreadyMissed) {
+                        val schId = obj.optString("id", "")
+                        val routeNm = routeName
+                        if (schId.isNotBlank()) {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                try {
+                                    val payload = JSONObject().apply { put("status", "MISSED") }
+                                    val encodedName = URLEncoder.encode(routeNm, "UTF-8")
+                                    var res = SupabaseClient.updateAuthenticatedTableRecord("schedules", "route_name=eq.$encodedName", payload, token)
+                                    if (!res.isSuccess) {
+                                        SupabaseClient.updateAuthenticatedTableRecord("schedules", "id=eq.$schId", payload, token)
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        "MISSED"
+                    } else {
+                        rawStatus
+                    }
+
                     list.add(
                         ScheduleItem(
                             id = obj.optString("id", "sch_$i"),
@@ -1375,8 +1408,8 @@ object HakotRepository {
                             endTime = parsedEnd,
                             wasteCategory = WasteCategory.GENERAL_WASTE,
                             truckAssigned = truckAssigned,
-                            status = obj.optString("status", "Scheduled"),
-                            isWeeklyRepeat = obj.optBoolean("is_weekly_repeat", false),
+                            status = computedStatus,
+                            isWeeklyRepeat = isWeeklyRepeat,
                             recurrenceEndDate = parsedEndRecur,
                             isDisabled = obj.optBoolean("is_disabled", false),
                             orderedSegments = orderedSegs

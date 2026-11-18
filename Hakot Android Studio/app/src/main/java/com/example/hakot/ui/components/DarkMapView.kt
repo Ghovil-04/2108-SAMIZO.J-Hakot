@@ -60,6 +60,7 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
+import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
@@ -339,6 +340,7 @@ private fun setupMapLibreRouteOverlay(
         if (style.getSource(sourceId) != null) style.removeSource(sourceId)
 
         val lineFeatures = mutableListOf<Feature>()
+        val isSinglePoint = segments.isEmpty() && points.size == 1
 
         if (segments.isNotEmpty()) {
             segments.forEach { segPts ->
@@ -350,7 +352,10 @@ private fun setupMapLibreRouteOverlay(
             }
         } else if (points.isNotEmpty()) {
             val valid = points.filter { it.longitude.isFinite() && it.latitude.isFinite() && it.longitude in -180.0..180.0 && it.latitude in -90.0..90.0 }
-            if (valid.size >= 2) {
+            if (valid.size == 1) {
+                val pt = valid[0]
+                lineFeatures.add(Feature.fromGeometry(Point.fromLngLat(pt.longitude, pt.latitude)))
+            } else if (valid.size >= 2) {
                 val line = LineString.fromLngLats(valid.map { Point.fromLngLat(it.longitude, it.latitude) })
                 lineFeatures.add(Feature.fromGeometry(line))
             }
@@ -361,37 +366,50 @@ private fun setupMapLibreRouteOverlay(
 
             style.addSource(GeoJsonSource(sourceId, featureCollection))
 
-            // 1. Royal Blue Route Base Line Layer (Slightly thicker: 7f)
-            val lineLayer = LineLayer(layerId, sourceId).apply {
-                setProperties(
-                    PropertyFactory.lineColor(android.graphics.Color.parseColor("#1D4ED8")),
-                    PropertyFactory.lineWidth(7f),
-                    PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
-                    PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
-                )
-            }
-            style.addLayer(lineLayer)
+            if (isSinglePoint) {
+                val circleLayer = CircleLayer(layerId, sourceId).apply {
+                    setProperties(
+                        PropertyFactory.circleRadius(16f),
+                        PropertyFactory.circleColor(android.graphics.Color.parseColor("#10B981")),
+                        PropertyFactory.circleStrokeWidth(4f),
+                        PropertyFactory.circleStrokeColor(android.graphics.Color.WHITE)
+                    )
+                }
+                style.addLayer(circleLayer)
+                Log.d("HAKOT_ROUTE", "Added current location point marker successfully!")
+            } else {
+                // 1. Royal Blue Route Base Line Layer (Slightly thicker: 7f)
+                val lineLayer = LineLayer(layerId, sourceId).apply {
+                    setProperties(
+                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#1D4ED8")),
+                        PropertyFactory.lineWidth(7f),
+                        PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                        PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+                    )
+                }
+                style.addLayer(lineLayer)
 
-            // 2. Animated Flowing Direction Stream Layer (5 frames, fewer dots reaching next dot)
-            val dashArray = when (flowPhase) {
-                0 -> arrayOf(0.2f, 5.0f)
-                1 -> arrayOf(1.4f, 3.8f)
-                2 -> arrayOf(2.6f, 2.6f)
-                3 -> arrayOf(3.8f, 1.4f)
-                else -> arrayOf(5.0f, 0.2f)
-            }
+                // 2. Animated Flowing Direction Stream Layer (5 frames, fewer dots reaching next dot)
+                val dashArray = when (flowPhase) {
+                    0 -> arrayOf(0.2f, 5.0f)
+                    1 -> arrayOf(1.4f, 3.8f)
+                    2 -> arrayOf(2.6f, 2.6f)
+                    3 -> arrayOf(3.8f, 1.4f)
+                    else -> arrayOf(5.0f, 0.2f)
+                }
 
-            val flowLayer = LineLayer(flowLayerId, sourceId).apply {
-                setProperties(
-                    PropertyFactory.lineColor(android.graphics.Color.parseColor("#60A5FA")),
-                    PropertyFactory.lineWidth(4f),
-                    PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
-                    PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
-                    PropertyFactory.lineDasharray(dashArray)
-                )
+                val flowLayer = LineLayer(flowLayerId, sourceId).apply {
+                    setProperties(
+                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#60A5FA")),
+                        PropertyFactory.lineWidth(4f),
+                        PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                        PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+                        PropertyFactory.lineDasharray(dashArray)
+                    )
+                }
+                style.addLayer(flowLayer)
+                Log.d("HAKOT_ROUTE", "Added animated route overlay with ${lineFeatures.size} features successfully!")
             }
-            style.addLayer(flowLayer)
-            Log.d("HAKOT_ROUTE", "Added animated route overlay with ${lineFeatures.size} features successfully!")
         } else {
             Log.w("HAKOT_ROUTE", "Route overlay skipped: no valid segment line features.")
         }
