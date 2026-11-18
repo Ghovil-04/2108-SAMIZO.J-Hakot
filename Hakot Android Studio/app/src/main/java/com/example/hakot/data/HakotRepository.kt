@@ -371,12 +371,8 @@ object HakotRepository {
         val cleanEmail = emailInput.trim()
         var authResp = SupabaseClient.signIn(cleanEmail, passwordInput)
         if (authResp == null) {
-            val profile = currentDistrictAdmin
-            isAuthenticated = true
-            authenticatedUser = profile
-            currentAdminRole = profile.role
-            currentAdminName = profile.fullName
-            return true
+            lastLoginError = "Invalid email or password. Please check your credentials."
+            return false
         }
 
         val accessToken = authResp.accessToken
@@ -1279,6 +1275,19 @@ object HakotRepository {
             return validEnd && targetDate.dayOfWeek == sch.date.dayOfWeek
         }
         return false
+    }
+
+    suspend fun updateTruckerLocationInSupabase(driverId: String, lat: Double, lon: Double, isSharing: Boolean, context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        Log.d("HAKOT_GPS", "Updating trucker $driverId location: lat=$lat, lon=$lon, isSharing=$isSharing")
+        val payload = JSONObject().apply {
+            put("current_latitude", lat)
+            put("current_longitude", lon)
+            put("is_sharing_location", isSharing)
+            put("last_location_update", OffsetDateTime.now().toString())
+        }
+        val res = SupabaseClient.updateAuthenticatedTableRecord("trucker_accounts", "id=eq.$driverId", payload, token)
+        return res.isSuccess
     }
 
     suspend fun fetchSchedulesFromSupabase(context: Context): Boolean {

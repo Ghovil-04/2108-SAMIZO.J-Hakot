@@ -3150,7 +3150,8 @@ fun CollectionScheduleDashboardView() {
     var scheduleToDelete by remember { mutableStateOf<ScheduleItem?>(null) }
     var isLoadingSchedules by remember { mutableStateOf(false) }
     var selectedWeekStart by remember { mutableStateOf(LocalDate.now(zoneId).with(DayOfWeek.MONDAY)) }
-    var selectedDay by remember { mutableStateOf(LocalDate.now(zoneId)) }
+    var adminSelectedDay by remember { mutableStateOf<LocalDate?>(null) }
+    var adminScheduleSubTab by remember { mutableIntStateOf(0) } // 0=All/Day, 1=Draft, 2=Assigned, 3=Active, 4=Completed, 5=Missed
     var successMsg by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit, showSchedulePlanner) {
@@ -3165,9 +3166,47 @@ fun CollectionScheduleDashboardView() {
     val now = LocalDateTime.now(ZoneId.of("Asia/Manila"))
     val today = LocalDate.now(ZoneId.of("Asia/Manila"))
 
-    val schedulesForSelectedDay = HakotRepository.schedules.filter {
-        HakotRepository.isScheduleActiveOnDate(it, selectedDay)
-    }.sortedWith(compareBy({ it.date }, { it.startTime }))
+    val allAdminSchedules = HakotRepository.schedules.sortedWith(compareBy({ it.date }, { it.startTime }))
+
+    val adminDrafts = allAdminSchedules.filter { 
+        val st = it.status.uppercase()
+        (st == "DRAFT" || st == "SCHEDULED" || st.isBlank() || it.truckAssigned.contains("No assigned", ignoreCase = true)) && st != "ASSIGNED"
+    }
+    val adminAssigned = allAdminSchedules.filter { it.status.equals("ASSIGNED", ignoreCase = true) }
+    val adminActive = allAdminSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "ACTIVE" || st == "ON_HOLD" || st == "HOLD" || st == "ON HOLD"
+    }
+    val adminCompleted = allAdminSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "COMPLETED" || st == "DONE" || st == "COMPLETE"
+    }
+    val adminMissed = allAdminSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "MISSED" || (it.date.isBefore(today) && !adminCompleted.contains(it) && !it.isWeeklyRepeat)
+    }
+
+    val adminFilterTitle = when (adminScheduleSubTab) {
+        1 -> "DRAFT"
+        2 -> "ASSIGNED"
+        3 -> "ACTIVE"
+        4 -> "COMPLETED"
+        5 -> "MISSED"
+        else -> if (adminSelectedDay != null) "FOR $adminSelectedDay" else "ALL SCHEDULES"
+    }
+
+    val schedulesForSelectedDay = allAdminSchedules.filter { sch ->
+        val matchesDay = if (adminScheduleSubTab != 0) true else (adminSelectedDay == null || HakotRepository.isScheduleActiveOnDate(sch, adminSelectedDay!!))
+        val matchesTab = when (adminScheduleSubTab) {
+            1 -> adminDrafts.contains(sch)
+            2 -> adminAssigned.contains(sch)
+            3 -> adminActive.contains(sch)
+            4 -> adminCompleted.contains(sch)
+            5 -> adminMissed.contains(sch)
+            else -> true
+        }
+        matchesDay && matchesTab
+    }
 
     if (showSchedulePlanner) {
         val scope = rememberCoroutineScope()
@@ -3177,7 +3216,7 @@ fun CollectionScheduleDashboardView() {
             color = DarkBackground
         ) {
             MapRoutePlannerScreen(
-                initialDate = selectedDay,
+                initialDate = adminSelectedDay ?: LocalDate.now(),
                 onDismiss = { showSchedulePlanner = false },
                 onSaveScheduledRoute = { routeName, scheduleName, barangayName, date, startTime, endTime, truck, repeatWeekly, repeatEnd, segments ->
                     val newSchedule = ScheduleItem(
@@ -3199,7 +3238,7 @@ fun CollectionScheduleDashboardView() {
                     scope.launch {
                         val schedRes = HakotRepository.saveScheduledRouteToSupabase(newSchedule, context)
                         if (schedRes.first) {
-                            selectedDay = date
+                            adminSelectedDay = date
                             selectedWeekStart = date.with(DayOfWeek.MONDAY)
                             HakotRepository.fetchSchedulesFromSupabase(context)
                             successMsg = "Success: Scheduled route '$routeName' saved to table 'Collection_Scheds' for $date!"
@@ -3248,6 +3287,46 @@ fun CollectionScheduleDashboardView() {
             Spacer(modifier = Modifier.height(8.dp))
         }
 
+        // Interactive Status Metrics Bar (Draft, Assigned, Active, Completed, Missed)
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            MetricCard(
+                title = "Draft",
+                value = "${adminDrafts.size}",
+                color = TextOnDarkPrimary,
+                modifier = Modifier.weight(1f).clickable { adminScheduleSubTab = if (adminScheduleSubTab == 1) 0 else 1 }
+            )
+            MetricCard(
+                title = "Assigned",
+                value = "${adminAssigned.size}",
+                color = EcoGreenLight,
+                modifier = Modifier.weight(1f).clickable { adminScheduleSubTab = if (adminScheduleSubTab == 2) 0 else 2 }
+            )
+            MetricCard(
+                title = "Active",
+                value = "${adminActive.size}",
+                color = EcoGreenPrimary,
+                modifier = Modifier.weight(1f).clickable { adminScheduleSubTab = if (adminScheduleSubTab == 3) 0 else 3 }
+            )
+            MetricCard(
+                title = "Completed",
+                value = "${adminCompleted.size}",
+                color = EcoGreenLight,
+                modifier = Modifier.weight(1f).clickable { adminScheduleSubTab = if (adminScheduleSubTab == 4) 0 else 4 }
+            )
+            MetricCard(
+                title = "Missed",
+                value = "${adminMissed.size}",
+                color = HazardousRed,
+                modifier = Modifier.weight(1f).clickable { adminScheduleSubTab = if (adminScheduleSubTab == 5) 0 else 5 }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
         // WEEKLY CALENDAR WIDGET
         Card(
             colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
@@ -3273,7 +3352,7 @@ fun CollectionScheduleDashboardView() {
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     daysOfWeek.forEach { day ->
-                        val isSelected = day == selectedDay
+                        val isSelected = day == adminSelectedDay
                         val hasSchedules = HakotRepository.schedules.any {
                             HakotRepository.isScheduleActiveOnDate(it, day)
                         }
@@ -3283,7 +3362,10 @@ fun CollectionScheduleDashboardView() {
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isSelected) EcoGreenPrimary else if (hasSchedules) EcoGreenContainer else DarkSurface)
-                                .clickable { selectedDay = day }
+                                .clickable { 
+                                    adminSelectedDay = if (adminSelectedDay == day) null else day
+                                    adminScheduleSubTab = 0
+                                }
                                 .padding(horizontal = 8.dp, vertical = 6.dp)
                         ) {
                             Text(day.dayOfWeek.name.take(3), fontSize = 10.sp, color = if (isSelected) Color.Black else TextOnDarkSecondary)
@@ -3295,7 +3377,7 @@ fun CollectionScheduleDashboardView() {
         }
 
         Spacer(modifier = Modifier.height(14.dp))
-        Text("Scheduled Routes for $selectedDay (${schedulesForSelectedDay.size}):", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+        Text("Schedule List — VIEWING $adminFilterTitle (${schedulesForSelectedDay.size}):", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
         Spacer(modifier = Modifier.height(6.dp))
 
         if (isLoadingSchedules) {
@@ -3311,9 +3393,11 @@ fun CollectionScheduleDashboardView() {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
             ) {
-                Text("No collection routes scheduled for this day.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(16.dp))
+                Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text("No $adminFilterTitle collection schedules found.", fontSize = 12.sp, color = TextOnDarkSecondary, textAlign = TextAlign.Center)
+                }
             }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
