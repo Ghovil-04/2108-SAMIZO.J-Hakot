@@ -324,7 +324,7 @@ object HakotRepository {
 
         // 1. Check if login is a trucker via public.trucker_accounts table FIRST
         val anonToken = SupabaseClient.SUPABASE_ANON_KEY
-        val truckerFetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucker_accounts?or=(username.eq.$cleanInput,email.eq.$cleanInput)&password.eq.$passwordInput", anonToken)
+        val truckerFetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucker_accounts?and=(or(username.eq.$cleanInput,email.eq.$cleanInput),password.eq.$passwordInput)", anonToken)
         if (truckerFetchRes.isSuccess && truckerFetchRes.data != null && truckerFetchRes.data.length() > 0) {
             val tObj = truckerFetchRes.data.getJSONObject(0)
             val uid = tObj.optString("id")
@@ -1194,6 +1194,7 @@ object HakotRepository {
                 put("recurrence_end_date", JSONObject.NULL)
             }
             put("is_disabled", schedule.isDisabled)
+            put("completed_dates", JSONArray(schedule.completedDates))
             put("route_corridor", segmentsJsonArray.toString())
         }
 
@@ -1204,32 +1205,10 @@ object HakotRepository {
             return Pair(false, "Supabase Error [schedules HTTP ${res.statusCode}]: ${res.errorMessage}")
         }
 
-        // Insert ordered schedule_segments
-        Log.d("HAKOT_ROUTE", "SCHEDULE_SEGMENTS: About to enter child insertion loop. orderedSegments.size = ${schedule.orderedSegments.size}")
-        for ((idx, seg) in schedule.orderedSegments.withIndex()) {
-            val segUuid = UUID.randomUUID().toString()
-            val segPayload = JSONObject().apply {
-                put("id", segUuid)
-                put("schedule_id", scheduleUuid)
-                put("street_segment_id", seg.id)
-                put("sequence_number", idx + 1)
-                put("is_reversed", seg.isReversed)
-                put("progress_status", "not_started")
-            }
-            Log.d("HAKOT_ROUTE", "SCHEDULE_SEGMENTS: Requesting insert for segment #${idx + 1} (id=${seg.id}, name=${seg.segmentName}): $segPayload")
-            val segRes = SupabaseClient.insertAuthenticatedTableRecord("schedule_segments", segPayload, token)
-            Log.d("HAKOT_ROUTE", "SCHEDULE_SEGMENTS: Response for segment #${idx + 1}: success=${segRes.isSuccess}, statusCode=${segRes.statusCode}, error=${segRes.errorMessage}")
-            if (!segRes.isSuccess) {
-                Log.e("HAKOT_ROUTE", "SCHEDULE_SEGMENTS: FAILED to insert segment #${idx + 1} (${seg.id}): HTTP ${segRes.statusCode} - ${segRes.errorMessage}")
-                return Pair(false, "Supabase Error [schedule_segments HTTP ${segRes.statusCode}]: ${segRes.errorMessage}")
-            }
-        }
-        Log.d("HAKOT_ROUTE", "SCHEDULE_SEGMENTS: All ${schedule.orderedSegments.size} segments successfully inserted.")
-
         if (!schedules.any { it.id == schedule.id }) {
             schedules.add(schedule.copy())
         }
-        return Pair(true, "Successfully saved to 'schedules' and 'schedule_segments'.")
+        return Pair(true, "Successfully saved schedule.")
     }
 
     suspend fun updateScheduleInSupabase(schedule: ScheduleItem, context: Context): Boolean {
@@ -1239,6 +1218,7 @@ object HakotRepository {
             put("is_disabled", schedule.isDisabled)
             put("status", schedule.status)
             put("operational", schedule.operational)
+            put("completed_dates", JSONArray(schedule.completedDates))
             if (schedule.truckAssigned.isNotBlank()) {
                 put("truck_assigned", schedule.truckAssigned)
             }
@@ -1268,8 +1248,25 @@ object HakotRepository {
         return res.isSuccess
     }
 
+    val localCompletedDates = mutableSetOf<String>()
+
+    fun markWeeklyDateCompletedLocally(routeName: String, dateStr: String) {
+        val cleanName = routeName.substringBefore(" (").trim()
+        localCompletedDates.add("${cleanName}_$dateStr")
+        localCompletedDates.add("${routeName}_$dateStr")
+    }
+
     fun isScheduleActiveOnDate(sch: ScheduleItem, targetDate: LocalDate): Boolean {
-        if (sch.date == targetDate || sch.date.toString() == targetDate.toString()) return true
+        val targetDateStr = targetDate.toString()
+        val cleanName = sch.routeName.substringBefore(" (").trim()
+        if (sch.completedDates.contains(targetDateStr) || 
+            localCompletedDates.contains("${cleanName}_$targetDateStr") || 
+            localCompletedDates.contains("${sch.routeName}_$targetDateStr")
+        ) {
+            return false
+        }
+
+        if (sch.date == targetDate || sch.date.toString() == targetDateStr) return true
         if (sch.isWeeklyRepeat && !targetDate.isBefore(sch.date)) {
             val validEnd = sch.recurrenceEndDate == null || !targetDate.isAfter(sch.recurrenceEndDate)
             return validEnd && targetDate.dayOfWeek == sch.date.dayOfWeek
@@ -1464,6 +1461,14 @@ object HakotRepository {
                         rawStatus
                     }
 
+                    val compDatesArr = obj.optJSONArray("completed_dates")
+                    val compDatesList = mutableListOf<String>()
+                    if (compDatesArr != null) {
+                        for (j in 0 until compDatesArr.length()) {
+                            compDatesList.add(compDatesArr.getString(j))
+                        }
+                    }
+
                     list.add(
                         ScheduleItem(
                             id = obj.optString("id", "sch_$i"),
@@ -1478,7 +1483,8 @@ object HakotRepository {
                             isWeeklyRepeat = isWeeklyRepeat,
                             recurrenceEndDate = parsedEndRecur,
                             isDisabled = obj.optBoolean("is_disabled", false),
-                            orderedSegments = orderedSegs
+                            orderedSegments = orderedSegs,
+                            completedDates = compDatesList
                         )
                     )
                 }

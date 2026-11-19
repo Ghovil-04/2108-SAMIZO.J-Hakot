@@ -335,7 +335,9 @@ data class ScheduleItem(
     val recurrenceEndDate: LocalDate? = null,
     val isDisabled: Boolean = false,
     var operational: Boolean = true,
-    val orderedSegments: List<GisRoadSegmentFeature> = emptyList()
+    val orderedSegments: List<GisRoadSegmentFeature> = emptyList(),
+    val completedDates: List<String> = emptyList(),
+    val dateStatuses: Map<String, String> = emptyMap()
 )
 
 data class ReportMessage(

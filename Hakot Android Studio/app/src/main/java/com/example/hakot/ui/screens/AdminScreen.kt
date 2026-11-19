@@ -19,9 +19,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalTime
+import java.util.UUID
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.hakot.ui.components.DarkMapView
@@ -1042,7 +1044,20 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
     var showGpsBroadcastModal by remember { mutableStateOf(false) }
     var selectedScheduleDetail by remember { mutableStateOf<ScheduleItem?>(null) }
     var scheduleToStartFromAssignedConfirm by remember { mutableStateOf<ScheduleItem?>(null) }
+    var scheduleToCompleteConfirm by remember { mutableStateOf<ScheduleItem?>(null) }
+    var isSharingLocation by remember { mutableStateOf(false) }
+    var showSharingConfirmDialog by remember { mutableStateOf(false) }
+    var broadcastLiveLat by remember { mutableStateOf(14.0725) }
+    var broadcastLiveLon by remember { mutableStateOf(120.6335) }
     val driver = HakotRepository.authenticatedUser
+
+    val driverId = driver?.userId ?: "default_driver"
+    val sharedPrefs = remember(context, driverId) {
+        context.getSharedPreferences("hakot_driver_prefs_$driverId", Context.MODE_PRIVATE)
+    }
+    var hiddenCompletedFromDayViewIds by remember(driverId) {
+        mutableStateOf(sharedPrefs.getStringSet("dismissed_schedules", emptySet()) ?: emptySet())
+    }
 
     LaunchedEffect(Unit) {
         isLoadingSchedules = true
@@ -1066,7 +1081,6 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
 
     var showTruckDropdown by remember { mutableStateOf(false) }
     var driverSubTab by remember { mutableIntStateOf(0) } // 0=All, 1=Unassigned, 2=Assigned, 3=Active, 4=Completed, 5=Missed
-    var hiddenCompletedFromDayViewIds by remember { mutableStateOf(setOf<String>()) }
     val zoneId = ZoneId.of("Asia/Manila")
     var selectedWeekStart by remember { mutableStateOf(LocalDate.now(zoneId).with(DayOfWeek.MONDAY)) }
     var selectedDay by remember { mutableStateOf<LocalDate?>(LocalDate.now(zoneId)) }
@@ -1122,6 +1136,12 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
             else -> true
         }
         matchesDay && matchesTab
+    }.filterNot { sch ->
+        sch.isWeeklyRepeat && selectedDay != null && allDriverSchedules.any { other ->
+            !other.isWeeklyRepeat &&
+            other.date == selectedDay &&
+            (other.routeName == "${sch.routeName} ($selectedDay)" || other.routeName == sch.routeName || other.routeName.startsWith(sch.routeName))
+        }
     }
 
     val unassignedCount = unassignedSchedules.size
@@ -1135,6 +1155,57 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
         contentPadding = PaddingValues(14.dp),
         modifier = Modifier.fillMaxSize().background(DarkBackground)
     ) {
+        // Floating Mini Island Live GPS Notification Banner
+        if (isSharingLocation) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, HazardousRed, RoundedCornerShape(24.dp))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(HazardousRed, CircleShape)
+                            )
+                            Column {
+                                Text("🔴 LIVE GPS LOCATION BROADCASTING", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = HazardousRed)
+                                Text("Lat: ${String.format("%.4f", broadcastLiveLat)}° N • Lon: ${String.format("%.4f", broadcastLiveLon)}° E", fontSize = 10.sp, color = TextOnDarkSecondary)
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isSharingLocation = false
+                                    if (driver?.userId != null) {
+                                        HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, false, context)
+                                    }
+                                    Toast.makeText(context, "Stopped live GPS location sharing", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("Stop Sharing", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
+
         // Compact Sleek Header Island
         item {
             Card(
@@ -1355,9 +1426,11 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
             }
         } else {
             items(driverSchedules) { sch ->
-                val isActive = sch.status.equals("ACTIVE", ignoreCase = true)
-                val isOnHold = sch.status.equals("ON_HOLD", ignoreCase = true) || sch.status.equals("HOLD", ignoreCase = true)
-                val isCompleted = sch.status.equals("COMPLETED", ignoreCase = true) || sch.status.equals("DONE", ignoreCase = true)
+                val targetDateStr = (selectedDay ?: LocalDate.now()).toString()
+                val effectiveStatus = if (sch.isWeeklyRepeat) sch.dateStatuses[targetDateStr] ?: "DRAFT" else sch.status
+                val isActive = effectiveStatus.equals("ACTIVE", ignoreCase = true)
+                val isOnHold = effectiveStatus.equals("ON_HOLD", ignoreCase = true) || effectiveStatus.equals("HOLD", ignoreCase = true)
+                val isCompleted = effectiveStatus.equals("COMPLETED", ignoreCase = true) || effectiveStatus.equals("DONE", ignoreCase = true) || sch.completedDates.contains(targetDateStr)
 
                 val isUnassigned = sch.truckAssigned.isBlank() || 
                     sch.truckAssigned.contains("No assigned", ignoreCase = true) || 
@@ -1409,43 +1482,36 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (isUnassigned || sch.status.equals("DRAFT", ignoreCase = true)) {
-                                // Assign Myself Button (DRAFT -> ASSIGNED)
+                                // Assign Myself Button (DRAFT -> ASSIGNED or Clone Instance for Weekly)
                                 Button(
                                     onClick = {
                                         scope.launch {
                                             val truckInfo = if (selectedTruckInUse != null) {
                                                 "${selectedTruckInUse?.plateNumber} (${selectedTruckInUse?.truckCode}) - Driver: ${driver?.fullName ?: "Driver"}"
                                             } else "Driver: ${driver?.fullName ?: "Driver"}"
-                                            val updated = sch.copy(status = "ASSIGNED", truckAssigned = truckInfo)
-                                            val success = HakotRepository.updateScheduleInSupabase(updated, context)
-                                            if (success) {
-                                                val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
-                                                if (idx != -1) {
-                                                    HakotRepository.schedules[idx] = updated
-                                                    val temp = HakotRepository.schedules.toList()
-                                                    HakotRepository.schedules.clear()
-                                                    HakotRepository.schedules.addAll(temp)
+
+                                            if (sch.isWeeklyRepeat && selectedDay != null) {
+                                                // Create a single-date clone instance in Supabase!
+                                                val targetDate = selectedDay!!
+                                                val cloneUuid = UUID.randomUUID().toString()
+                                                val cloneRouteName = "${sch.routeName} ($targetDate)"
+                                                val clonedSchedule = sch.copy(
+                                                    id = cloneUuid,
+                                                    routeName = cloneRouteName,
+                                                    date = targetDate,
+                                                    isWeeklyRepeat = false,
+                                                    status = "ASSIGNED",
+                                                    truckAssigned = truckInfo
+                                                )
+                                                val saveRes = HakotRepository.saveScheduledRouteToSupabase(clonedSchedule, context)
+                                                if (saveRes.first) {
+                                                    HakotRepository.fetchSchedulesFromSupabase(context)
+                                                    Toast.makeText(context, "Assigned to route for $targetDate! Created instance $cloneRouteName.", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "Error creating instance: ${saveRes.second}", Toast.LENGTH_SHORT).show()
                                                 }
-                                                Toast.makeText(context, "Schedule assigned! Status is now ASSIGNED.", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text("Assign Myself", fontSize = 10.sp, color = Color.Black, fontWeight = FontWeight.Bold)
-                                }
-                            } else {
-                                // Toggle Start / Hold Button
-                                Button(
-                                    onClick = {
-                                        if (sch.status.equals("ASSIGNED", ignoreCase = true)) {
-                                            scheduleToStartFromAssignedConfirm = sch
-                                        } else {
-                                            scope.launch {
-                                                val newStatus = if (isActive) "ON_HOLD" else "ACTIVE"
-                                                val updated = sch.copy(status = newStatus)
+                                            } else {
+                                                val updated = sch.copy(status = "ASSIGNED", truckAssigned = truckInfo)
                                                 val success = HakotRepository.updateScheduleInSupabase(updated, context)
                                                 if (success) {
                                                     val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
@@ -1455,9 +1521,82 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                                         HakotRepository.schedules.clear()
                                                         HakotRepository.schedules.addAll(temp)
                                                     }
-                                                    Toast.makeText(context, "Status updated to $newStatus", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Schedule assigned! Status is now ASSIGNED.", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("Assign Myself", fontSize = 10.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                            } else if (sch.status.equals("ASSIGNED", ignoreCase = true) || effectiveStatus.equals("ASSIGNED", ignoreCase = true)) {
+                                Button(
+                                    onClick = { scheduleToStartFromAssignedConfirm = sch },
+                                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("Start Collection", fontSize = 10.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            if (!sch.isWeeklyRepeat && sch.routeName.contains("(")) {
+                                                // Delete the cloned instance from DB so it reverts to master template!
+                                                val success = HakotRepository.deleteScheduleFromSupabase(sch.id, context)
+                                                if (success) {
+                                                    HakotRepository.schedules.removeIf { it.id == sch.id }
+                                                    Toast.makeText(context, "Unassigned. Reverted to master weekly schedule.", Toast.LENGTH_SHORT).show()
+                                                }
+                                            } else {
+                                                val updated = sch.copy(status = "DRAFT", truckAssigned = "No assigned truck yet")
+                                                val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                                if (success) {
+                                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                                    if (idx != -1) {
+                                                        HakotRepository.schedules[idx] = updated
+                                                        val temp = HakotRepository.schedules.toList()
+                                                        HakotRepository.schedules.clear()
+                                                        HakotRepository.schedules.addAll(temp)
+                                                    }
+                                                    Toast.makeText(context, "Unassigned successfully. Status is back to DRAFT.", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text("Unassign Myself", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                // Toggle Start / Hold Button
+                                Button(
+                                    onClick = {
+                                        if (isActive) {
+                                            scope.launch {
+                                                val updated = sch.copy(status = "ON_HOLD")
+                                                val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                                if (success) {
+                                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                                    if (idx != -1) {
+                                                        HakotRepository.schedules[idx] = updated
+                                                        val temp = HakotRepository.schedules.toList()
+                                                        HakotRepository.schedules.clear()
+                                                        HakotRepository.schedules.addAll(temp)
+                                                    }
+                                                    Toast.makeText(context, "Status updated to ON_HOLD", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        } else {
+                                            scheduleToStartFromAssignedConfirm = sch
                                         }
                                     },
                                     enabled = !isCompleted,
@@ -1472,22 +1611,7 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
 
                                 // Complete / Done Button
                                 Button(
-                                    onClick = {
-                                        scope.launch {
-                                            val updated = sch.copy(status = "COMPLETED")
-                                            val success = HakotRepository.updateScheduleInSupabase(updated, context)
-                                            if (success) {
-                                                val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
-                                                if (idx != -1) {
-                                                    HakotRepository.schedules[idx] = updated
-                                                    val temp = HakotRepository.schedules.toList()
-                                                    HakotRepository.schedules.clear()
-                                                    HakotRepository.schedules.addAll(temp)
-                                                }
-                                                Toast.makeText(context, "Collection marked as COMPLETED!", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    },
+                                    onClick = { scheduleToCompleteConfirm = sch },
                                     enabled = !isCompleted,
                                     colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
@@ -1500,7 +1624,9 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                     Spacer(modifier = Modifier.width(4.dp))
                                     TextButton(
                                         onClick = {
-                                            hiddenCompletedFromDayViewIds = hiddenCompletedFromDayViewIds + sch.id
+                                            val newSet = hiddenCompletedFromDayViewIds + sch.id
+                                            hiddenCompletedFromDayViewIds = newSet
+                                            sharedPrefs.edit().putStringSet("dismissed_schedules", newSet).apply()
                                             Toast.makeText(context, "Hidden from day view (still visible in Completed filter)", Toast.LENGTH_SHORT).show()
                                         },
                                         contentPadding = PaddingValues(2.dp)
@@ -1519,13 +1645,104 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
     scheduleToStartFromAssignedConfirm?.let { sch ->
         AlertDialog(
             onDismissRequest = { scheduleToStartFromAssignedConfirm = null },
-            title = { Text("Confirm Start Collection", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
-            text = { Text("Are you sure you want to start collection for route '${sch.routeName}'? This will set the schedule status from ASSIGNED to ACTIVE.", color = TextOnDarkSecondary) },
+            title = { Text("Start Collection & Live Location", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to start collection for route '${sch.routeName}'? Would you also like to start live GPS location broadcasting for this route?", color = TextOnDarkSecondary) },
+            confirmButton = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val updated = sch.copy(status = "ACTIVE")
+                                val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                if (success) {
+                                    isSharingLocation = true
+                                    if (driver?.userId != null) {
+                                        HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, true, context)
+                                    }
+                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                    if (idx != -1) {
+                                        HakotRepository.schedules[idx] = updated
+                                        val temp = HakotRepository.schedules.toList()
+                                        HakotRepository.schedules.clear()
+                                        HakotRepository.schedules.addAll(temp)
+                                    }
+                                    Toast.makeText(context, "Started collection & live location broadcasting!", Toast.LENGTH_SHORT).show()
+                                }
+                                scheduleToStartFromAssignedConfirm = null
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Start with Live Location", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val updated = sch.copy(status = "ACTIVE")
+                                val success = HakotRepository.updateScheduleInSupabase(updated, context)
+                                if (success) {
+                                    val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
+                                    if (idx != -1) {
+                                        HakotRepository.schedules[idx] = updated
+                                        val temp = HakotRepository.schedules.toList()
+                                        HakotRepository.schedules.clear()
+                                        HakotRepository.schedules.addAll(temp)
+                                    }
+                                    Toast.makeText(context, "Started collection (Location sharing off)", Toast.LENGTH_SHORT).show()
+                                }
+                                scheduleToStartFromAssignedConfirm = null
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurface),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Start without Live Location", color = TextOnDarkPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    Button(
+                        onClick = { scheduleToStartFromAssignedConfirm = null },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Cancel", color = TextOnDarkSecondary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            },
+            dismissButton = {},
+            containerColor = DarkSurfaceCard
+        )
+    }
+
+    scheduleToCompleteConfirm?.let { sch ->
+        val targetDateStr = (selectedDay ?: LocalDate.now()).toString()
+        AlertDialog(
+            onDismissRequest = { scheduleToCompleteConfirm = null },
+            title = { Text("Confirm Complete Collection", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to mark collection route '${sch.routeName}' as completed for $targetDateStr?", color = TextOnDarkSecondary) },
             confirmButton = {
                 Button(
                     onClick = {
                         scope.launch {
-                            val updated = sch.copy(status = "ACTIVE")
+                            val baseRouteName = sch.routeName.substringBefore(" (").trim()
+                            HakotRepository.markWeeklyDateCompletedLocally(baseRouteName, targetDateStr)
+                            HakotRepository.markWeeklyDateCompletedLocally(sch.routeName, targetDateStr)
+
+                            val parentMaster = HakotRepository.schedules.find { it.isWeeklyRepeat && (it.routeName == baseRouteName || it.routeName.equals(baseRouteName, ignoreCase = true)) }
+                            if (parentMaster != null && !parentMaster.completedDates.contains(targetDateStr)) {
+                                val updatedParent = parentMaster.copy(completedDates = (parentMaster.completedDates + targetDateStr).distinct())
+                                HakotRepository.updateScheduleInSupabase(updatedParent, context)
+                            }
+
+                            val newCompletedDates = (sch.completedDates + targetDateStr).distinct()
+                            val updated = sch.copy(status = "COMPLETED", completedDates = newCompletedDates)
                             val success = HakotRepository.updateScheduleInSupabase(updated, context)
                             if (success) {
                                 val idx = HakotRepository.schedules.indexOfFirst { it.id == sch.id }
@@ -1535,18 +1752,18 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                     HakotRepository.schedules.clear()
                                     HakotRepository.schedules.addAll(temp)
                                 }
-                                Toast.makeText(context, "Started collection for ${sch.routeName}!", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Collection marked as COMPLETED for $targetDateStr!", Toast.LENGTH_SHORT).show()
                             }
-                            scheduleToStartFromAssignedConfirm = null
+                            scheduleToCompleteConfirm = null
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
                 ) {
-                    Text("Confirm & Start", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("Confirm & Complete", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { scheduleToStartFromAssignedConfirm = null }) {
+                TextButton(onClick = { scheduleToCompleteConfirm = null }) {
                     Text("Cancel", color = TextOnDarkSecondary)
                 }
             },
@@ -1555,41 +1772,18 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
     }
 
     if (showGpsBroadcastModal) {
-        var liveLat by remember { mutableStateOf(14.0725) }
-        var liveLon by remember { mutableStateOf(120.6335) }
-
-        DisposableEffect(context) {
-            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val listener = LocationListener { loc ->
-                liveLat = loc.latitude
-                liveLon = loc.longitude
-            }
-
-            try {
-                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                    ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    val lastLoc = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                        ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-                    if (lastLoc != null) {
-                        liveLat = lastLoc.latitude
-                        liveLon = lastLoc.longitude
-                    }
-                    locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, listener)
-                    locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 1000L, 1f, listener)
+        // 30-second periodic database sync when sharing is active
+        LaunchedEffect(isSharingLocation) {
+            while (isSharingLocation) {
+                delay(30_000L)
+                if (driver?.userId != null) {
+                    HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, true, context)
+                    Log.d("HAKOT_GPS", "30s Periodic location recalculate & sync: lat=$broadcastLiveLat, lon=$broadcastLiveLon")
                 }
-            } catch (e: Exception) {
-                Log.e("HAKOT_GPS", "Error getting live location", e)
-            }
-
-            onDispose {
-                try {
-                    locationManager.removeUpdates(listener)
-                } catch (_: Exception) {}
             }
         }
 
-        val currentGpsPoint = GeoPoint(liveLat, liveLon)
+        val currentGpsPoint = GeoPoint(broadcastLiveLat, broadcastLiveLon)
         val currentGpsList = listOf(currentGpsPoint)
 
         Dialog(
@@ -1638,28 +1832,90 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = DarkSurface),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(10.dp))
+                        modifier = Modifier.fillMaxWidth().border(1.dp, if (isSharingLocation) HazardousRed else EcoGreenPrimary, RoundedCornerShape(10.dp))
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("Vehicle: ${selectedTruckInUse?.truckCode ?: "Truck"} (${selectedTruckInUse?.plateNumber ?: "N/A"})", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
                             Text("Operator: ${driver?.fullName ?: "Driver"}", fontSize = 11.sp, color = TextOnDarkSecondary)
-                            Text("Status: GPS Active & Broadcasting Live", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                            Text("Latitude: ${String.format("%.4f", liveLat)}° N • Longitude: ${String.format("%.4f", liveLon)}° E", fontSize = 11.sp, color = TextOnDarkPrimary)
+                            Text(
+                                text = if (isSharingLocation) "🔴 Status: GPS Active & Broadcasting Live (Auto-syncing every 30s)" else "🟢 Status: GPS Active & Ready (Not Sharing)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSharingLocation) HazardousRed else EcoGreenLight
+                            )
+                            Text("Latitude: ${String.format("%.4f", broadcastLiveLat)}° N • Longitude: ${String.format("%.4f", broadcastLiveLon)}° E", fontSize = 11.sp, color = TextOnDarkPrimary)
                             Text("Location Source: Live Device/Emulator GPS", fontSize = 10.sp, color = TextOnDarkSecondary)
                         }
                     }
 
                     Button(
-                        onClick = { showGpsBroadcastModal = false },
-                        colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                        onClick = {
+                            if (isSharingLocation) {
+                                scope.launch {
+                                    isSharingLocation = false
+                                    if (driver?.userId != null) {
+                                        HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, false, context)
+                                    }
+                                    Toast.makeText(context, "Stopped sharing live location", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                showSharingConfirmDialog = true
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isSharingLocation) HazardousRed else EcoGreenPrimary),
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Close Location View", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(
+                            if (isSharingLocation) "Stop Sharing Location" else "Start Sharing Location",
+                            color = if (isSharingLocation) Color.White else Color.Black,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Button(
+                        onClick = { showGpsBroadcastModal = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurface),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Close Location View", color = TextOnDarkPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
                 }
             }
         }
+    }
+
+    if (showSharingConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showSharingConfirmDialog = false },
+            title = { Text("Confirm Start Sharing GPS", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to start sharing your live GPS coordinates with the database?", color = TextOnDarkSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isSharingLocation = true
+                            if (driver?.userId != null) {
+                                HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, true, context)
+                            }
+                            Toast.makeText(context, "Started sharing live GPS coordinates to database!", Toast.LENGTH_SHORT).show()
+                            showSharingConfirmDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Confirm & Start", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSharingConfirmDialog = false }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
     }
 
     selectedScheduleDetail?.let { sch ->
@@ -3031,7 +3287,14 @@ fun MapRoutePlannerScreen(
                                 items(daysOfWeekList) { (dow, label) ->
                                     FilterChip(
                                         selected = selectedDayOfWeek == dow,
-                                        onClick = { selectedDayOfWeek = dow },
+                                        onClick = {
+                                            selectedDayOfWeek = dow
+                                            var target = LocalDate.now()
+                                            while (target.dayOfWeek != dow) {
+                                                target = target.plusDays(1)
+                                            }
+                                            collectionDateInput = target.toString()
+                                        },
                                         label = { Text(label.take(3), fontSize = 10.sp) },
                                         colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight, containerColor = DarkSurface, labelColor = TextOnDarkSecondary)
                                     )
@@ -3109,12 +3372,20 @@ fun MapRoutePlannerScreen(
                                 val end = LocalTime.parse(endTimeInput.trim())
                                 if (!end.isAfter(start)) return@Button
 
-                                val date: LocalDate = try {
-                                    LocalDate.parse(collectionDateInput.trim())
-                                } catch (_: Exception) {
-                                    LocalDate.now()
-                                }
                                 val repeatWeekly: Boolean = (scheduleType == "DAY_OF_WEEK")
+                                val date: LocalDate = if (repeatWeekly) {
+                                    var target = LocalDate.now()
+                                    while (target.dayOfWeek != selectedDayOfWeek) {
+                                        target = target.plusDays(1)
+                                    }
+                                    target
+                                } else {
+                                    try {
+                                        LocalDate.parse(collectionDateInput.trim())
+                                    } catch (_: Exception) {
+                                        LocalDate.now()
+                                    }
+                                }
                                 val endRecur: LocalDate? = if (repeatWeekly) {
                                     try { LocalDate.parse(repeatEndDate.trim()) } catch (_: Exception) { date.plusMonths(3) }
                                 } else null
