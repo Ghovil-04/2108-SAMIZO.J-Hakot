@@ -27,6 +27,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.hakot.ui.components.DarkMapView
 import com.example.hakot.model.Route
 import com.example.hakot.model.Dumptrack
+import com.example.hakot.model.Dumpsite
 import androidx.compose.material3.CircularProgressIndicator
 import com.example.hakot.model.ScheduleItem
 import com.example.hakot.model.WasteCategory
@@ -218,6 +219,8 @@ fun AdminScreen(
                     "Account Management",
                     "Account Applications",
                     "Collection Schedule",
+                    "Schedule Audit",
+                    "Dumpsites",
                     "Fleet Trucks",
                     "Citizen Reports",
                     "Audit History"
@@ -227,6 +230,8 @@ fun AdminScreen(
                     "District Overview",
                     "Account Management",
                     "Collection Schedule",
+                    "Schedule Audit",
+                    "Dumpsites",
                     "Fleet Trucks",
                     "Citizen Reports",
                     "Audit History"
@@ -334,19 +339,29 @@ fun AdminScreen(
                         3 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             CollectionScheduleDashboardView()
                         } else {
-                            AdminTrucksView()
+                            AdminScheduleAuditView()
                         }
                         4 -> if (userRole == UserRole.SYSTEM_OWNER) {
+                            AdminScheduleAuditView()
+                        } else {
+                            AdminDumpsitesView()
+                        }
+                        5 -> if (userRole == UserRole.SYSTEM_OWNER) {
+                            AdminDumpsitesView()
+                        } else {
+                            AdminTrucksView()
+                        }
+                        6 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             AdminTrucksView()
                         } else {
                             AdminReportsView()
                         }
-                        5 -> if (userRole == UserRole.SYSTEM_OWNER) {
+                        7 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             AdminReportsView()
                         } else {
                             AdminAuditLogsView()
                         }
-                        6 -> if (userRole == UserRole.SYSTEM_OWNER) {
+                        8 -> if (userRole == UserRole.SYSTEM_OWNER) {
                             AdminAuditLogsView()
                         }
                     }
@@ -3402,19 +3417,12 @@ fun CollectionScheduleDashboardView() {
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 schedulesForSelectedDay.forEach { sch ->
-                    val isToday = sch.date == today
-                    val statusLabel = when {
-                        sch.isDisabled -> "Disabled"
-                        sch.date.isAfter(today) -> "Upcoming"
-                        isToday && now.toLocalTime().isBefore(sch.startTime) -> "Upcoming"
-                        isToday && !now.toLocalTime().isAfter(sch.endTime) -> "Active"
-                        else -> "Completed / Expired"
-                    }
-
-                    val statusColor = when (statusLabel) {
-                        "Active" -> EcoGreenLight
-                        "Upcoming" -> EcoGreenLight
-                        "Disabled" -> HazardousRed
+                    val dbStatus = sch.status.uppercase()
+                    val statusColor = when (dbStatus) {
+                        "ACTIVE" -> EcoGreenLight
+                        "ON_HOLD", "HOLD" -> RecycleYellow
+                        "COMPLETED", "DONE", "COMPLETE" -> EcoGreenPrimary
+                        "ASSIGNED" -> EcoGreenLight
                         else -> TextOnDarkSecondary
                     }
 
@@ -3430,7 +3438,7 @@ fun CollectionScheduleDashboardView() {
                                 Log.d("HAKOT_ROUTE", "CLICK_SCHEDULE: Selected schedule id=${sch.id}, routeName=${sch.routeName}, orderedSegments.size=${sch.orderedSegments.size}")
                                 selectedScheduleDetail = sch 
                             }
-                            .border(1.dp, if (sch.isDisabled) TextOnDarkSecondary.copy(alpha = 0.3f) else if (statusLabel == "Active") EcoGreenPrimary else DarkBorder, RoundedCornerShape(16.dp))
+                            .border(1.dp, if (sch.isDisabled) TextOnDarkSecondary.copy(alpha = 0.3f) else if (dbStatus == "ACTIVE") EcoGreenPrimary else DarkBorder, RoundedCornerShape(16.dp))
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Row(
@@ -3440,12 +3448,12 @@ fun CollectionScheduleDashboardView() {
                             ) {
                                 Text(sch.routeName, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (sch.isDisabled) TextOnDarkSecondary else TextOnDarkPrimary)
                                 Surface(
-                                    color = if (sch.isDisabled) DarkSurface else if (statusLabel == "Active") EcoGreenContainer else DarkSurface,
+                                    color = if (sch.isDisabled) DarkSurface else if (dbStatus == "ACTIVE") EcoGreenContainer else if (dbStatus == "ON_HOLD") RecycleYellowContainer else DarkSurface,
                                     shape = RoundedCornerShape(6.dp),
                                     border = BorderStroke(1.dp, if (sch.isDisabled) TextOnDarkSecondary else statusColor)
                                 ) {
                                     Text(
-                                        text = if (sch.isDisabled) "Inactive / Pale" else statusLabel,
+                                        text = if (sch.isDisabled) "Disabled" else sch.status,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (sch.isDisabled) TextOnDarkSecondary else statusColor,
@@ -3497,10 +3505,13 @@ fun CollectionScheduleDashboardView() {
                                     Text(if (sch.operational) "Operational" else "Not Operational", fontSize = 11.sp, color = if (sch.operational) EcoGreenLight else TextOnDarkSecondary, fontWeight = FontWeight.Bold)
                                 }
 
-                                TextButton(onClick = {
-                                    scheduleToDelete = sch
-                                }) {
-                                    Text("Cancel Schedule", fontSize = 11.sp, color = HazardousRed)
+                                val canCancel = dbStatus == "DRAFT" || dbStatus == "SCHEDULED" || dbStatus == "ASSIGNED" || dbStatus.isBlank()
+                                if (canCancel) {
+                                    TextButton(onClick = {
+                                        scheduleToDelete = sch
+                                    }) {
+                                        Text("Cancel Schedule", fontSize = 11.sp, color = HazardousRed)
+                                    }
                                 }
                             }
                         }
@@ -4972,6 +4983,486 @@ fun AccountActivationScreen(
                         modifier = Modifier.fillMaxWidth().height(44.dp)
                     ) {
                         Text("Proceed to Login", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdminDumpsitesView() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showAddDumpsiteModal by remember { mutableStateOf(false) }
+    var nameInput by remember { mutableStateOf("") }
+    var latInput by remember { mutableStateOf("14.0700") }
+    var lonInput by remember { mutableStateOf("120.6300") }
+    var isOperationalInput by remember { mutableStateOf(true) }
+    var typeInput by remember { mutableStateOf("MRF / Disposal Facility") }
+    var addressInput by remember { mutableStateOf("") }
+    var acceptedWasteInput by remember { mutableStateOf("General Household Waste, Compostables & Recyclables") }
+    var hoursInput by remember { mutableStateOf("6:00 AM - 6:00 PM") }
+    var contactInput by remember { mutableStateOf("(043) 723-HAKOT") }
+
+    LaunchedEffect(Unit) {
+        HakotRepository.fetchDumpsitesFromSupabase(context)
+    }
+
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Municipal Dumpsites & MRF Facilities", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                Text("Manage municipal disposal sites and material recovery facilities", fontSize = 11.sp, color = TextOnDarkSecondary)
+            }
+            Button(
+                onClick = { showAddDumpsiteModal = true },
+                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text("Add Dumpsite", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        if (HakotRepository.dumpsites.isEmpty()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("No dumpsites registered in the database.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(16.dp))
+            }
+        } else {
+            HakotRepository.dumpsites.forEach { ds ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(ds.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            Surface(
+                                color = if (ds.status) EcoGreenContainer else HazardousRed.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, if (ds.status) EcoGreenPrimary else HazardousRed)
+                            ) {
+                                Text(
+                                    text = if (ds.status) "OPERATIONAL" else "CLOSED / NON-OPERATIONAL",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (ds.status) EcoGreenLight else HazardousRed,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Text("📍 Address: ${ds.address}", fontSize = 11.sp, color = EcoGreenLight)
+                        Text("🌐 Coordinates (lat, lon): ${ds.latitude}, ${ds.longitude}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                        Text("🏛️ Type: ${ds.type} • Hours: ${ds.operatingHours}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                        Text("♻️ Accepted: ${ds.acceptedWasteTypes}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                        Text("📞 Contact: ${ds.contactNumber}", fontSize = 10.sp, color = TextOnDarkSecondary)
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        val success = HakotRepository.deleteDumpsiteFromSupabase(ds.id, context)
+                                        if (success) {
+                                            HakotRepository.dumpsites.removeIf { it.id == ds.id }
+                                            Toast.makeText(context, "Dumpsite deleted from DB", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Delete Dumpsite ✕", fontSize = 10.sp, color = HazardousRed)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAddDumpsiteModal) {
+        AlertDialog(
+            onDismissRequest = { showAddDumpsiteModal = false },
+            title = { Text("Register New Dumpsite", color = EcoGreenLight, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it },
+                        label = { Text("Facility Name (Required)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = addressInput,
+                        onValueChange = { addressInput = it },
+                        label = { Text("Address / Location") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = latInput,
+                        onValueChange = { latInput = it },
+                        label = { Text("Latitude (lat)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = lonInput,
+                        onValueChange = { lonInput = it },
+                        label = { Text("Longitude (lon)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Operational Status:", fontSize = 12.sp, color = TextOnDarkPrimary, fontWeight = FontWeight.Bold)
+                        Switch(
+                            checked = isOperationalInput,
+                            onCheckedChange = { isOperationalInput = it }
+                        )
+                    }
+                    OutlinedTextField(
+                        value = typeInput,
+                        onValueChange = { typeInput = it },
+                        label = { Text("Facility Type (e.g. MRF)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = acceptedWasteInput,
+                        onValueChange = { acceptedWasteInput = it },
+                        label = { Text("Accepted Waste Types") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = hoursInput,
+                        onValueChange = { hoursInput = it },
+                        label = { Text("Operating Hours") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = contactInput,
+                        onValueChange = { contactInput = it },
+                        label = { Text("Contact Number") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (nameInput.isNotBlank()) {
+                            scope.launch {
+                                val latVal = latInput.toDoubleOrNull() ?: 14.0700
+                                val lonVal = lonInput.toDoubleOrNull() ?: 120.6300
+                                val newDs = Dumpsite(
+                                    id = "ds_${System.currentTimeMillis()}",
+                                    name = nameInput.trim(),
+                                    latitude = latVal,
+                                    longitude = lonVal,
+                                    status = isOperationalInput,
+                                    type = typeInput.trim(),
+                                    address = addressInput.trim(),
+                                    capacityPercent = 50,
+                                    operatingHours = hoursInput.trim(),
+                                    acceptedWasteTypes = acceptedWasteInput.trim(),
+                                    isOpenNow = isOperationalInput,
+                                    contactNumber = contactInput.trim()
+                                )
+                                val success = HakotRepository.saveDumpsiteToSupabase(newDs, context)
+                                if (success) {
+                                    HakotRepository.dumpsites.add(newDs)
+                                    Toast.makeText(context, "Dumpsite registered successfully!", Toast.LENGTH_SHORT).show()
+                                    showAddDumpsiteModal = false
+                                    nameInput = ""
+                                    addressInput = ""
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Save Dumpsite", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDumpsiteModal = false }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
+    }
+}
+
+@Composable
+fun AdminScheduleAuditView() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var auditSubTab by remember { mutableIntStateOf(0) }
+    var selectedCompletedIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedMissedIds by remember { mutableStateOf(setOf<String>()) }
+    var successMsg by remember { mutableStateOf<String?>(null) }
+
+    val today = LocalDate.now()
+    val allSchedules = HakotRepository.schedules
+
+    val completedList = allSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "COMPLETED" || st == "DONE" || st == "COMPLETE"
+    }
+
+    val missedList = allSchedules.filter { 
+        val st = it.status.uppercase()
+        st == "MISSED" || (it.date.isBefore(today) && st != "COMPLETED" && st != "DONE" && st != "COMPLETE" && !it.isWeeklyRepeat)
+    }
+
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Schedule Audit & Resolution", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                Text("Audit completed schedules and resolve missed collection routes", fontSize = 11.sp, color = TextOnDarkSecondary)
+            }
+        }
+
+        successMsg?.let {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = EcoGreenContainer),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().border(1.dp, EcoGreenPrimary, RoundedCornerShape(10.dp))
+            ) {
+                Text(it, color = EcoGreenLight, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = auditSubTab == 0,
+                onClick = { auditSubTab = 0 },
+                label = { Text("Completed Schedules (${completedList.size})", fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight, containerColor = DarkSurfaceCard, labelColor = TextOnDarkSecondary)
+            )
+            FilterChip(
+                selected = auditSubTab == 1,
+                onClick = { auditSubTab = 1 },
+                label = { Text("Missed Schedules (${missedList.size})", fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = HazardousRed.copy(alpha = 0.2f), selectedLabelColor = HazardousRed, containerColor = DarkSurfaceCard, labelColor = TextOnDarkSecondary)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        if (auditSubTab == 0) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = completedList.isNotEmpty() && selectedCompletedIds.size == completedList.size,
+                        onCheckedChange = { checked ->
+                            selectedCompletedIds = if (checked) completedList.map { it.id }.toSet() else emptySet()
+                        }
+                    )
+                    Text("Select All (${completedList.size})", fontSize = 11.sp, color = TextOnDarkPrimary)
+                }
+
+                Button(
+                    onClick = {
+                        if (selectedCompletedIds.isNotEmpty()) {
+                            scope.launch {
+                                var count = 0
+                                selectedCompletedIds.forEach { id ->
+                                    val success = HakotRepository.deleteScheduleFromSupabase(id, context)
+                                    if (success) count++
+                                }
+                                successMsg = "Successfully approved and permanently deleted $count completed schedule(s) from DB."
+                                selectedCompletedIds = emptySet()
+                            }
+                        }
+                    },
+                    enabled = selectedCompletedIds.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text("Approve Selected (${selectedCompletedIds.size})", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                }
+            }
+
+            if (completedList.isEmpty()) {
+                Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    Text("No completed schedules found for audit.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(16.dp))
+                }
+            } else {
+                completedList.forEach { sch ->
+                    val isSelected = selectedCompletedIds.contains(sch.id)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, if (isSelected) EcoGreenPrimary else DarkBorder, RoundedCornerShape(12.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        selectedCompletedIds = if (checked) selectedCompletedIds + sch.id else selectedCompletedIds - sch.id
+                                    }
+                                )
+                                Column {
+                                    Text(sch.routeName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                    Text("Barangay: ${sch.barangay} • Date: ${sch.date}", fontSize = 10.sp, color = EcoGreenLight)
+                                    Text("Assigned: ${sch.truckAssigned}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val success = HakotRepository.deleteScheduleFromSupabase(sch.id, context)
+                                        if (success) {
+                                            successMsg = "Approved & permanently deleted route '${sch.routeName}' from DB."
+                                        } else {
+                                            successMsg = "Failed to delete schedule."
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text("Approve ✕", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = missedList.isNotEmpty() && selectedMissedIds.size == missedList.size,
+                        onCheckedChange = { checked ->
+                            selectedMissedIds = if (checked) missedList.map { it.id }.toSet() else emptySet()
+                        }
+                    )
+                    Text("Select All (${missedList.size})", fontSize = 11.sp, color = TextOnDarkPrimary)
+                }
+
+                Button(
+                    onClick = {
+                        if (selectedMissedIds.isNotEmpty()) {
+                            scope.launch {
+                                var count = 0
+                                selectedMissedIds.forEach { id ->
+                                    val success = HakotRepository.deleteScheduleFromSupabase(id, context)
+                                    if (success) count++
+                                }
+                                successMsg = "Successfully resolved and permanently deleted $count missed schedule(s) from DB."
+                                selectedMissedIds = emptySet()
+                            }
+                        }
+                    },
+                    enabled = selectedMissedIds.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text("Resolve Selected (${selectedMissedIds.size})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                }
+            }
+
+            if (missedList.isEmpty()) {
+                Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    Text("No missed schedules found.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(16.dp))
+                }
+            } else {
+                missedList.forEach { sch ->
+                    val isSelected = selectedMissedIds.contains(sch.id)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, if (isSelected) HazardousRed else DarkBorder, RoundedCornerShape(12.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        selectedMissedIds = if (checked) selectedMissedIds + sch.id else selectedMissedIds - sch.id
+                                    }
+                                )
+                                Column {
+                                    Text(sch.routeName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                                    Text("Barangay: ${sch.barangay} • Date: ${sch.date}", fontSize = 10.sp, color = HazardousRed)
+                                    Text("Assigned: ${sch.truckAssigned}", fontSize = 10.sp, color = TextOnDarkSecondary)
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val success = HakotRepository.deleteScheduleFromSupabase(sch.id, context)
+                                        if (success) {
+                                            successMsg = "Resolved & permanently deleted missed route '${sch.routeName}' from DB."
+                                        } else {
+                                            successMsg = "Failed to resolve schedule."
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text("Resolve ✕", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            }
+                        }
                     }
                 }
             }

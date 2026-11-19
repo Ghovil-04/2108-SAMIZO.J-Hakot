@@ -144,7 +144,10 @@ fun DarkMapView(
                 if (fetchedRoutePoints.isNotEmpty()) {
                     try {
                         val validPts = fetchedRoutePoints.filter { it.longitude.isFinite() && it.latitude.isFinite() && it.longitude in -180.0..180.0 && it.latitude in -90.0..90.0 }
-                        if (validPts.size >= 2) {
+                        if (validPts.size == 1) {
+                            val pt = validPts[0]
+                            maplibreMap.easeCamera(CameraUpdateFactory.newLatLngZoom(LatLng(pt.latitude, pt.longitude), 16.0), 300)
+                        } else if (validPts.size >= 2) {
                             val bounds = LatLngBounds.Builder().apply {
                                 validPts.forEach { pt ->
                                     include(LatLng(pt.latitude, pt.longitude))

@@ -1290,6 +1290,63 @@ object HakotRepository {
         return res.isSuccess
     }
 
+    suspend fun fetchDumpsitesFromSupabase(context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: return false
+        val fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("dumpsites?select=*", token)
+        if (fetchRes.isSuccess && fetchRes.data != null) {
+            val list = mutableListOf<Dumpsite>()
+            val arr = fetchRes.data
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    Dumpsite(
+                        id = obj.optString("id", "ds_$i"),
+                        name = obj.optString("name", "Dumpsite"),
+                        type = obj.optString("type", "MRF"),
+                        address = obj.optString("address", "Nasugbu"),
+                        latitude = obj.optDouble("latitude", 14.0700),
+                        longitude = obj.optDouble("longitude", 120.6300),
+                        capacityPercent = obj.optInt("capacity_percent", 50),
+                        operatingHours = obj.optString("operating_hours", "6:00 AM - 6:00 PM"),
+                        acceptedWasteTypes = obj.optString("accepted_waste_types", "General Waste"),
+                        isOpenNow = obj.optBoolean("is_open_now", true),
+                        contactNumber = obj.optString("contact_number", "(043) 723-HAKOT")
+                    )
+                )
+            }
+            dumpsites.clear()
+            dumpsites.addAll(list)
+            return true
+        }
+        return false
+    }
+
+    suspend fun saveDumpsiteToSupabase(ds: Dumpsite, context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val payload = JSONObject().apply {
+            put("id", ds.id)
+            put("municipality_id", activeOrganization.municipalityId)
+            put("name", ds.name)
+            put("type", ds.type)
+            put("address", ds.address)
+            put("latitude", ds.latitude)
+            put("longitude", ds.longitude)
+            put("capacity_percent", ds.capacityPercent)
+            put("operating_hours", ds.operatingHours)
+            put("accepted_waste_types", ds.acceptedWasteTypes)
+            put("is_open_now", ds.isOpenNow)
+            put("contact_number", ds.contactNumber)
+        }
+        val res = SupabaseClient.insertAuthenticatedTableRecord("dumpsites", payload, token)
+        return res.isSuccess
+    }
+
+    suspend fun deleteDumpsiteFromSupabase(dumpsiteId: String, context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val res = SupabaseClient.deleteTableRecord("dumpsites", "id=eq.$dumpsiteId", token)
+        return res.isSuccess
+    }
+
     suspend fun fetchSchedulesFromSupabase(context: Context): Boolean {
         val token = getValidAccessToken(context) ?: return false
         Log.d("HAKOT_ROUTE", "Fetching schedules from Supabase...")
