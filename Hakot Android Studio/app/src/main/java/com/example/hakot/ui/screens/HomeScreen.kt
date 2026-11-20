@@ -1,5 +1,7 @@
 package com.example.hakot.ui.screens
 
+import android.util.Log
+import com.example.hakot.R
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
@@ -48,6 +50,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -63,6 +66,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,16 +74,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import android.widget.Toast
 import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.model.ReportType
+import com.example.hakot.model.ScheduleItem
 import com.example.hakot.model.WasteCategory
 import com.example.hakot.ui.components.DarkMapView
 import com.example.hakot.ui.components.TopSearchBar
@@ -99,6 +107,8 @@ import com.example.hakot.ui.theme.ResidualCyanContainer
 import com.example.hakot.ui.theme.TextOnDarkMuted
 import com.example.hakot.ui.theme.TextOnDarkPrimary
 import com.example.hakot.ui.theme.TextOnDarkSecondary
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,423 +117,123 @@ fun HomeScreen(
     onQueryChange: (String) -> Unit = {},
     onMenuClick: () -> Unit = {},
     isAdminMode: Boolean = false,
+    initialShowReportDialog: Boolean = false,
+    onReportDialogDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var isSheetExpanded by remember { mutableStateOf(false) }
-    var showReportDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        try {
+            Log.d("HAKOT_HOME", "Home screen opened - Fetching all launch data from Supabase...")
+            HakotRepository.restoreSession(context)
+            HakotRepository.fetchSchedulesFromSupabase(context)
+            HakotRepository.fetchTrucksFromSupabase(context)
+            HakotRepository.fetchDumpsitesFromSupabase(context)
+            HakotRepository.fetchAnonymousReportsFromSupabase()
+            Log.d("HAKOT_HOME", "Fetch all launch data on home succeeded. Schedules count=${HakotRepository.schedules.size}")
+        } catch (e: Exception) {
+            Log.e("HAKOT_HOME", "Error fetching launch data on home screen", e)
+        }
+    }
+
+    var showReportDialog by remember(initialShowReportDialog) { mutableStateOf(initialShowReportDialog) }
     var selectedReportType by remember { mutableStateOf(ReportType.MISSED_COLLECTION) }
     var isMapInteracting by remember { mutableStateOf(false) }
 
-    // Animated sheet height based on drag state
-    val sheetMaxHeight = 560.dp
-    val sheetMinHeight = 175.dp
-    val sheetHeight by animateDpAsState(
-        targetValue = if (isSheetExpanded) sheetMaxHeight else sheetMinHeight,
-        label = "SheetHeightAnimation"
-    )
-
-    val scrollState = rememberScrollState()
-
     Box(modifier = modifier.fillMaxSize()) {
-        // Fullscreen Vector/OSM Map Background with interaction listener
-        DarkMapView(
-            searchQuery = searchQuery,
-            onReportClick = { showReportDialog = true },
-            onMapInteractionStateChange = { interacting ->
-                isMapInteracting = interacting
-            }
-        )
-
-        // Floating Top Search Bar Island over the Map - Hides smoothly during map interaction
-        AnimatedVisibility(
-            visible = !isMapInteracting,
-            enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
-            modifier = Modifier.align(Alignment.TopCenter)
-        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Full-Width Top Header Box covering the entire top
             TopSearchBar(
                 query = searchQuery,
                 onQueryChange = onQueryChange,
                 onMenuClick = onMenuClick,
                 isAdminMode = isAdminMode
             )
-        }
 
-        // Minimalist Slim Floating Status & Report Pill right above Bottom Sheet
-        Surface(
-            onClick = { showReportDialog = true },
-            color = DarkSurface.copy(alpha = 0.92f),
-            shape = RoundedCornerShape(24.dp),
-            shadowElevation = 8.dp,
-            border = BorderStroke(1.dp, DarkBorder),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 185.dp)
-                .padding(horizontal = 16.dp)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // Map Container in standing rectangle format enclosed by a thick edge border and side margins
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(4.dp, DarkBorder, RoundedCornerShape(12.dp))
             ) {
-                Icon(
-                    imageVector = Icons.Default.DirectionsBus,
-                    contentDescription = "Fleet",
-                    tint = EcoGreenPrimary,
-                    modifier = Modifier.size(15.dp)
-                )
-                Text(
-                    text = "${HakotRepository.trucks.size} Trucks Active",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextOnDarkPrimary
+                DarkMapView(
+                    searchQuery = searchQuery,
+                    onReportClick = { showReportDialog = true },
+                    onMapInteractionStateChange = { interacting ->
+                        isMapInteracting = interacting
+                    }
                 )
             }
-        }
 
-        // Draggable Upwards Home Bottom Sheet
-        Surface(
-            color = DarkSurface,
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-            shadowElevation = 16.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(sheetHeight)
-                .align(Alignment.BottomCenter)
-                .draggable(
-                    orientation = Orientation.Vertical,
-                    state = rememberDraggableState { delta ->
-                        if (delta < -15) isSheetExpanded = true
-                        else if (delta > 15) isSheetExpanded = false
-                    }
-                )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            // Fixed Non-Draggable Bottom Box for Today's Schedules (Box shape, no round top edges)
+            Surface(
+                color = DarkSurface,
+                shape = RectangleShape,
+                shadowElevation = 16.dp,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // Drag Handle Bar Top Indicator
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { isSheetExpanded = !isSheetExpanded }
-                        .padding(vertical = 4.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            modifier = Modifier
-                                .width(42.dp)
-                                .height(5.dp)
-                                .clip(CircleShape)
-                                .background(TextOnDarkMuted.copy(alpha = 0.5f))
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Icon(
-                            imageVector = if (isSheetExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
-                            contentDescription = "Expand or Collapse Sheet",
-                            tint = TextOnDarkSecondary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                // Collapsed View: Next Hakot Schedule Widget & Live Summary
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { isSheetExpanded = !isSheetExpanded }
-                ) {
+                    // Header: Today's Schedules
+                    val todayDate = LocalDate.now()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(bottom = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.AccessTime,
-                                    contentDescription = "Countdown",
-                                    tint = EcoGreenPrimary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Next Hakot Schedule",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextOnDarkPrimary
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "📍 ${HakotRepository.detectedLocationName} • J.P. Laurel St Route",
-                                fontSize = 12.sp,
-                                color = TextOnDarkSecondary
-                            )
-                            Text(
-                                text = "⏳ Collection window active now",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = EcoGreenLight
-                            )
-                        }
-
-                        // On Track Badge
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(EcoGreenContainer)
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = "On Track",
-                                color = EcoGreenLight,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        Text(
+                            text = "Today's Schedules",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnDarkPrimary
+                        )
+                        Text(
+                            text = todayDate.format(DateTimeFormatter.ofPattern("EEE, MMM d")),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = EcoGreenPrimary
+                        )
                     }
-                }
 
-                if (!isSheetExpanded) {
-                    Text(
-                        text = "↑ Drag upward for LGU announcements, guidelines & reports",
-                        fontSize = 11.sp,
-                        color = TextOnDarkMuted,
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(top = 8.dp)
-                    )
-                }
+                    // Filter strictly for today's schedules from database public.schedules (no fallback to other dates)
+                    val todaySchedules = HakotRepository.schedules.filter { sch ->
+                        HakotRepository.isScheduleActiveOnDate(sch, todayDate)
+                    }.sortedBy { it.startTime }
 
-                // Expanded View Content (Scrollable when expanded)
-                if (isSheetExpanded) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = 8.dp)
-                            .verticalScroll(scrollState)
-                    ) {
-                        // Official LGU Announcements Section
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Campaign,
-                                contentDescription = "Announcements",
-                                tint = RecycleYellow,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Official LGU Announcements",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextOnDarkPrimary
+                    val displaySchedules: List<ScheduleItem> = todaySchedules
+
+                    when {
+                        displaySchedules.isEmpty() -> {
+                            EmptyCollectionStatusCard(modifier = Modifier.fillMaxWidth())
+                        }
+                        displaySchedules.size == 1 -> {
+                            CollectionStatusCardItem(
+                                schedule = displaySchedules.firstOrNull(),
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
-
-                        HakotRepository.announcements.forEach { ann ->
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                        else -> { // 2 or more schedules: swipable horizontal list (LazyRow)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = PaddingValues(end = 16.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = ann.title,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = TextOnDarkPrimary
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(DarkSurfaceVariant)
-                                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(ann.category, fontSize = 10.sp, color = RecycleYellow)
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = ann.message,
-                                        fontSize = 11.sp,
-                                        color = TextOnDarkSecondary
+                                items(displaySchedules) { sch ->
+                                    CollectionStatusCardItem(
+                                        schedule = sch,
+                                        modifier = Modifier.width(300.dp)
                                     )
                                 }
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Section 1: Anonymous Reporting System
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Security,
-                                contentDescription = "Anonymous",
-                                tint = EcoGreenPrimary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Anonymous Citizen Incident Reporting",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextOnDarkPrimary
-                            )
-                        }
-
-                        // Big Anonymous Report Action Card
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = HazardousRedContainer),
-                            shape = RoundedCornerShape(18.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showReportDialog = true }
-                                .border(1.dp, HazardousRed.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.ReportProblem,
-                                        contentDescription = "Report Issue",
-                                        tint = HazardousRed,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column {
-                                        Text(
-                                            text = "Report Waste Issue Anonymously",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = TextOnDarkPrimary
-                                        )
-                                        Text(
-                                            text = "No collection route, missed schedule, pile-up",
-                                            fontSize = 11.sp,
-                                            color = TextOnDarkSecondary
-                                        )
-                                    }
-                                }
-                                Icon(
-                                    imageVector = Icons.Default.ChevronRight,
-                                    contentDescription = "Go",
-                                    tint = TextOnDarkSecondary
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Quick Issue Action Chips
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            QuickReportChip(
-                                label = "No Route in Area",
-                                icon = Icons.Default.ReportProblem,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                selectedReportType = ReportType.NO_ROUTE_IN_AREA
-                                showReportDialog = true
-                            }
-                            QuickReportChip(
-                                label = "Missed Hakot",
-                                icon = Icons.Default.AddAlert,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                selectedReportType = ReportType.MISSED_COLLECTION
-                                showReportDialog = true
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Section 2: Waste Management Guidelines & Rules
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Guidelines",
-                                tint = RecycleYellow,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Waste Segregation Guidelines & Features",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextOnDarkPrimary
-                            )
-                        }
-
-                        WasteCategoryGrid()
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Local Sanitation Helpline Card
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PhoneInTalk,
-                                    contentDescription = "Helpline",
-                                    tint = EcoGreenPrimary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
-                                    Text(
-                                        text = "LGU Waste Sanitation Hotline",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextOnDarkPrimary
-                                    )
-                                    Text(
-                                        text = "(043) 723-HAKOT • 24/7 Anonymous Dispatch",
-                                        fontSize = 11.sp,
-                                        color = TextOnDarkSecondary
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(20.dp))
                     }
                 }
             }
@@ -533,10 +243,13 @@ fun HomeScreen(
         if (showReportDialog) {
             AnonymousReportModal(
                 initialType = selectedReportType,
-                onDismiss = { showReportDialog = false },
+                onDismiss = {
+                    showReportDialog = false
+                    onReportDialogDismiss()
+                },
                 onSubmitSuccess = { refCode ->
                     showReportDialog = false
-                    isSheetExpanded = false
+                    onReportDialogDismiss()
                 }
             )
         }
@@ -911,6 +624,156 @@ fun AnonymousReportModal(
                 }
             }
             Spacer(modifier = Modifier.height(28.dp))
+        }
+    }
+}
+
+@Composable
+fun CollectionStatusCardItem(
+    schedule: ScheduleItem?,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {}
+) {
+    val truckName = schedule?.truckAssigned?.takeIf { it.isNotBlank() } ?: "Truck #01"
+    val assignedArea = schedule?.barangay?.takeIf { it.isNotBlank() } ?: "Wawa → Bucana"
+    val scheduleTime = if (schedule != null) "${schedule.startTime} – ${schedule.endTime}" else "08:00 – 11:30 AM"
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+        shape = RoundedCornerShape(20.dp),
+        modifier = modifier.clickable { onClick() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Header: Collection status
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Collection status",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextOnDarkPrimary
+                )
+                if (schedule != null && schedule.routeName.isNotBlank()) {
+                    Text(
+                        text = schedule.routeName,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = EcoGreenPrimary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Truck Name Row
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_truck),
+                    contentDescription = "Truck",
+                    tint = EcoGreenPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = truckName,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextOnDarkPrimary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Assigned Area Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Assigned area",
+                    fontSize = 13.sp,
+                    color = TextOnDarkSecondary
+                )
+                Text(
+                    text = assignedArea,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextOnDarkPrimary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Schedule Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Schedule",
+                    fontSize = 13.sp,
+                    color = TextOnDarkSecondary
+                )
+                Text(
+                    text = scheduleTime,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextOnDarkPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun EmptyCollectionStatusCard(modifier: Modifier = Modifier) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+        shape = RoundedCornerShape(20.dp),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_truck),
+                contentDescription = "No Schedule",
+                tint = TextOnDarkMuted,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "No Collection Schedule Today",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextOnDarkPrimary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Check the Schedules tab for upcoming municipal waste collection routes.",
+                fontSize = 12.sp,
+                color = TextOnDarkSecondary,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

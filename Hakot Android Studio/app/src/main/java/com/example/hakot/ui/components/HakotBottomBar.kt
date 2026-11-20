@@ -14,8 +14,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -29,14 +30,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hakot.ui.theme.DarkSurface
-import com.example.hakot.ui.theme.EcoGreenContainer
-import com.example.hakot.ui.theme.EcoGreenPrimary
+import com.example.hakot.ui.theme.SafetyOrange
 import com.example.hakot.ui.theme.TextOnDarkSecondary
 
 enum class HakotTab(val label: String, val icon: ImageVector) {
-    HOME("Home", Icons.Default.Home),
-    MAP("Map", Icons.Default.LocationOn),
-    SCHEDULE("Schedule", Icons.Default.CalendarMonth)
+    MAP("Home", Icons.Default.LocationOn),
+    SCHEDULE("Schedules", Icons.Default.CalendarMonth),
+    REPORT("Report", Icons.Default.ReportProblem),
+    MORE("More", Icons.Default.Menu)
 }
 
 @Composable
@@ -53,19 +54,19 @@ fun HakotBottomBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 10.dp, horizontal = 16.dp),
+                .padding(vertical = 10.dp, horizontal = 12.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             HakotTab.entries.forEach { tab ->
-                val isSelected = selectedTab == tab
-                
+                val isSelected = selectedTab == tab && tab != HakotTab.MORE
+
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(horizontal = 4.dp)
+                        .padding(horizontal = 2.dp)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(if (isSelected) EcoGreenContainer else Color.Transparent)
+                        .background(Color.Transparent)
                         .clickable { onTabSelected(tab) }
                         .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
@@ -77,7 +78,7 @@ fun HakotBottomBar(
                         Icon(
                             imageVector = tab.icon,
                             contentDescription = tab.label,
-                            tint = if (isSelected) EcoGreenPrimary else TextOnDarkSecondary,
+                            tint = if (isSelected) SafetyOrange else TextOnDarkSecondary,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.height(3.dp))
@@ -85,7 +86,7 @@ fun HakotBottomBar(
                             text = tab.label,
                             fontSize = 11.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSelected) EcoGreenPrimary else TextOnDarkSecondary
+                            color = if (isSelected) SafetyOrange else TextOnDarkSecondary
                         )
                     }
                 }

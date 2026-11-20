@@ -146,7 +146,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
-import com.example.hakot.DumpTruckLogo
+import com.example.hakot.ui.components.DumpTruckLogo
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.model.AccountApplication
 import com.example.hakot.model.AccountInvitation

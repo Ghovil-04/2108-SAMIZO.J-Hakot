@@ -71,42 +71,5 @@ fun MapScreen(
                 isAdminMode = isAdminMode
             )
         }
-
-        // Active Trucks Indicator (Report Button removed)
-        AnimatedVisibility(
-            visible = true,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 12.dp)
-        ) {
-            Surface(
-                color = DarkSurface.copy(alpha = 0.92f),
-                shape = RoundedCornerShape(24.dp),
-                shadowElevation = 8.dp,
-                border = BorderStroke(1.dp, DarkBorder)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DirectionsBus,
-                        contentDescription = "Active Trucks",
-                        tint = EcoGreenPrimary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(2.dp))
-                    Text(
-                        text = "${HakotRepository.trucks.size} Trucks Active",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextOnDarkPrimary
-                    )
-                }
-            }
-        }
     }
 }

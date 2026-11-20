@@ -1,14 +1,15 @@
 package com.example.hakot.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -21,8 +22,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsBus
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NearMe
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,10 +40,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.hakot.R
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurface
@@ -56,171 +59,122 @@ import com.example.hakot.ui.theme.TextOnDarkSecondary
 fun TopSearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
-    onMenuClick: () -> Unit,
+    onMenuClick: () -> Unit = {},
+    onNotificationClick: () -> Unit = {},
     isAdminMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var isSuggestionsVisible by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(top = 4.dp, start = 16.dp, end = 16.dp, bottom = 4.dp)
+    Surface(
+        color = DarkSurface,
+        shadowElevation = 4.dp,
+        modifier = modifier.fillMaxWidth()
     ) {
-        // Modern, Compact Dark Navy Floating Search Island
-        Surface(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = DarkSurface,
-            shadowElevation = 8.dp,
-            border = BorderStroke(
-                width = 1.dp,
-                color = if (isAdminMode) EcoGreenPrimary else DarkBorder
-            )
+                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp)
+                .height(42.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
+            // Official Hakot Logo on Left
+            Image(
+                painter = painterResource(id = R.drawable.hakot_logo),
+                contentDescription = "Hakot Logo",
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .size(32.dp)
+                    .clip(CircleShape)
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Search Bar Input Field in sleek slim container
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = DarkSurfaceCard,
+                border = BorderStroke(1.dp, DarkBorder)
             ) {
-                // Balanced 3-Lines Hamburger Menu Button
-                IconButton(
-                    onClick = onMenuClick,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Menu,
-                        contentDescription = "Open Drawer Menu",
-                        tint = if (isAdminMode) EcoGreenPrimary else TextOnDarkPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                // Search Input Field & Placeholder
-                Box(
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 6.dp),
-                    contentAlignment = Alignment.CenterStart
+                        .fillMaxSize()
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (query.isEmpty()) {
-                        Text(
-                            text = if (isAdminMode) "Search routes, trucks, reports..." else "Search collection route or dumpsite...",
-                            style = TextStyle(
-                                color = TextOnDarkMuted,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Normal
-                            ),
-                            maxLines = 1
-                        )
-                    }
-                    BasicTextField(
-                        value = query,
-                        onValueChange = {
-                            onQueryChange(it)
-                            isSuggestionsVisible = it.isNotBlank()
-                        },
-                        singleLine = true,
-                        textStyle = TextStyle(
-                            color = TextOnDarkPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        cursorBrush = SolidColor(EcoGreenPrimary),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Balanced Search / Clear Action Icon
-                if (query.isNotEmpty()) {
-                    IconButton(
-                        onClick = {
-                            onQueryChange("")
-                            isSuggestionsVisible = false
-                        },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Clear Search",
-                            tint = TextOnDarkSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                } else {
                     Box(
-                        modifier = Modifier
-                            .padding(end = 8.dp)
-                            .size(32.dp),
-                        contentAlignment = Alignment.Center
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
                     ) {
+                        if (query.isEmpty()) {
+                            Text(
+                                text = if (isAdminMode) "Search routes, trucks..." else "Search collection route or dumpsite...",
+                                style = TextStyle(
+                                    color = TextOnDarkMuted,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Normal
+                                ),
+                                maxLines = 1
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = {
+                                onQueryChange(it)
+                                isSuggestionsVisible = it.isNotBlank()
+                            },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                color = TextOnDarkPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            cursorBrush = SolidColor(EcoGreenPrimary),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    if (query.isNotEmpty()) {
+                        IconButton(
+                            onClick = {
+                                onQueryChange("")
+                                isSuggestionsVisible = false
+                            },
+                            modifier = Modifier.size(26.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear",
+                                tint = TextOnDarkSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    } else {
                         Icon(
                             imageVector = Icons.Default.Search,
-                            contentDescription = "Search Icon",
+                            contentDescription = "Search",
                             tint = TextOnDarkSecondary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
             }
-        }
 
-        // Live Search Suggestions Popup Card
-        if (query.isNotBlank() && isSuggestionsVisible) {
-            val suggestions = remember(query) {
-                val list = mutableListOf<Pair<String, String>>()
-                HakotRepository.routes.filter { it.routeName.contains(query, true) || it.barangaysCovered.contains(query, true) }
-                    .forEach { list.add(it.routeName to "Route • ${it.barangaysCovered}") }
-                HakotRepository.trucks.filter { it.truckCode.contains(query, true) || it.assignedRoute.contains(query, true) }
-                    .forEach { list.add(it.truckCode to "Truck • ${it.assignedRoute}") }
-                HakotRepository.dumpsites.filter { it.name.contains(query, true) || it.address.contains(query, true) }
-                    .forEach { list.add(it.name to "Dumpsite • ${it.address}") }
-                list.take(4)
-            }
+            Spacer(modifier = Modifier.width(8.dp))
 
-            if (suggestions.isNotEmpty()) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp)
-                        .border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        suggestions.forEach { (title, subtitle) ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable {
-                                        onQueryChange(title)
-                                        isSuggestionsVisible = false
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = if (subtitle.startsWith("Truck")) Icons.Default.DirectionsBus else Icons.Default.NearMe,
-                                    contentDescription = title,
-                                    tint = EcoGreenPrimary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                                    Text(subtitle, fontSize = 10.sp, color = TextOnDarkSecondary)
-                                }
-                            }
-                        }
-                    }
-                }
+            // Clickable Notification Bell Icon on Right
+            IconButton(
+                onClick = onNotificationClick,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = "Notifications",
+                    tint = if (isAdminMode) EcoGreenPrimary else TextOnDarkPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
     }

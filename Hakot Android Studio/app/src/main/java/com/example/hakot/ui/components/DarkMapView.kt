@@ -65,13 +65,14 @@ import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.sources.GeoJsonOptions
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 import org.osmdroid.util.GeoPoint
-import java.time.LocalDate
 
 data class SelectedMarkerInfo(
     val title: String,
@@ -114,22 +115,41 @@ fun DarkMapView(
     val nasugbuCenter = remember { LatLng(14.0700, 120.6300) }
     val mapView = remember { MapView(context) }
 
-    // Continuous flowing line animation timer (300ms, 5 frames, reaching next dot)
+    // Continuous traveling shimmer animation timer (30ms, 100 smooth steps, zero-lag performance)
     LaunchedEffect(isStyleLoaded, fetchedRoutePoints) {
         if (isStyleLoaded) {
             while (true) {
-                delay(300)
-                flowAnimPhase = (flowAnimPhase + 1) % 5
+                delay(30)
+                flowAnimPhase = (flowAnimPhase + 1) % 100
             }
         }
     }
 
-    LaunchedEffect(HakotRepository.selectedMapDate, customRoutePoints, customRouteSegments, barangayRoads, selectedRoadIds) {
-        fetchedRouteSegments = customRouteSegments
+    LaunchedEffect(HakotRepository.selectedMapDate, HakotRepository.schedules.size, customRoutePoints, customRouteSegments, barangayRoads, selectedRoadIds) {
+        val segmentsToUse = if (customRouteSegments.isNotEmpty()) {
+            customRouteSegments
+        } else {
+            val todayDate = HakotRepository.selectedMapDate
+            val todaySchedules = HakotRepository.schedules.filter { sch ->
+                HakotRepository.isScheduleActiveOnDate(sch, todayDate)
+            }
+            val allSegs = mutableListOf<List<GeoPoint>>()
+            todaySchedules.forEach { sch ->
+                sch.orderedSegments.forEach { seg ->
+                    val coords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+                    if (coords.isNotEmpty()) {
+                        val gpList = coords.map { (lng, lat) -> GeoPoint(lat, lng) }
+                        allSegs.add(gpList)
+                    }
+                }
+            }
+            allSegs
+        }
+        fetchedRouteSegments = segmentsToUse
         val pointsToRender = if (customRoutePoints.isNotEmpty()) {
             customRoutePoints
-        } else if (customRouteSegments.isNotEmpty()) {
-            customRouteSegments.flatten()
+        } else if (segmentsToUse.isNotEmpty()) {
+            segmentsToUse.flatten()
         } else {
             Log.w("HAKOT_ROUTE", "WARNING: customRoutePoints is empty. No route line will be rendered; no fallback route substituted.")
             emptyList()
@@ -137,29 +157,44 @@ fun DarkMapView(
         fetchedRoutePoints = pointsToRender
     }
 
-    LaunchedEffect(isStyleLoaded, fetchedRoutePoints, fetchedRouteSegments, barangayRoads, selectedRoadIds, flowAnimPhase) {
+    // 1. Road Network Overlay (Runs ONLY when road data changes)
+    LaunchedEffect(isStyleLoaded, barangayRoads, selectedRoadIds) {
         if (isStyleLoaded) {
             mapLibreMapInstance?.let { maplibreMap ->
                 setupMapLibreRoadNetworkOverlay(maplibreMap, barangayRoads, selectedRoadIds)
-                setupMapLibreRouteOverlay(maplibreMap, fetchedRouteSegments, fetchedRoutePoints, flowAnimPhase)
-                if (fetchedRoutePoints.isNotEmpty()) {
-                    try {
-                        val validPts = fetchedRoutePoints.filter { it.longitude.isFinite() && it.latitude.isFinite() && it.longitude in -180.0..180.0 && it.latitude in -90.0..90.0 }
-                        if (validPts.size == 1 && autoCenterSinglePoint) {
-                            val pt = validPts[0]
-                            maplibreMap.easeCamera(CameraUpdateFactory.newLatLngZoom(LatLng(pt.latitude, pt.longitude), 16.0), 300)
-                        } else if (validPts.size >= 2) {
-                            val bounds = LatLngBounds.Builder().apply {
-                                validPts.forEach { pt ->
-                                    include(LatLng(pt.latitude, pt.longitude))
-                                }
-                            }.build()
-                            maplibreMap.easeCamera(CameraUpdateFactory.newLatLngBounds(bounds, 60), 500)
-                        }
-                    } catch (e: Exception) {
-                        Log.e("HAKOT_ROUTE", "Error easing camera to route bounds", e)
+            }
+        }
+    }
+
+    // 2. Camera Bounds Easing (Runs ONLY when route points change)
+    LaunchedEffect(isStyleLoaded, fetchedRoutePoints) {
+        if (isStyleLoaded && fetchedRoutePoints.isNotEmpty()) {
+            mapLibreMapInstance?.let { maplibreMap ->
+                try {
+                    val validPts = fetchedRoutePoints.filter { it.longitude.isFinite() && it.latitude.isFinite() && it.longitude in -180.0..180.0 && it.latitude in -90.0..90.0 }
+                    if (validPts.size == 1 && autoCenterSinglePoint) {
+                        val pt = validPts[0]
+                        maplibreMap.easeCamera(CameraUpdateFactory.newLatLngZoom(LatLng(pt.latitude, pt.longitude), 16.0), 300)
+                    } else if (validPts.size >= 2) {
+                        val bounds = LatLngBounds.Builder().apply {
+                            validPts.forEach { pt ->
+                                include(LatLng(pt.latitude, pt.longitude))
+                            }
+                        }.build()
+                        maplibreMap.easeCamera(CameraUpdateFactory.newLatLngBounds(bounds, 60), 500)
                     }
+                } catch (e: Exception) {
+                    Log.e("HAKOT_ROUTE", "Error easing camera to route bounds", e)
                 }
+            }
+        }
+    }
+
+    // 3. High-Performance Route Gradient Animation (Runs on animation ticks ONLY for fast property update)
+    LaunchedEffect(isStyleLoaded, fetchedRouteSegments, fetchedRoutePoints, flowAnimPhase) {
+        if (isStyleLoaded) {
+            mapLibreMapInstance?.let { maplibreMap ->
+                setupMapLibreRouteOverlay(maplibreMap, fetchedRouteSegments, fetchedRoutePoints, flowAnimPhase)
             }
         }
     }
@@ -329,16 +364,49 @@ private fun setupMapLibreRouteOverlay(
     points: List<GeoPoint>,
     flowPhase: Int = 0
 ) {
-    val style = maplibreMap.style ?: run {
-        Log.w("HAKOT_ROUTE", "MapLibre style is null when trying to setup route overlay.")
-        return
-    }
+    val style = maplibreMap.style ?: return
 
     val sourceId = "hakot-route-source"
     val layerId = "hakot-route-layer"
     val flowLayerId = "hakot-route-flow-layer"
 
     try {
+        val p1 = (flowPhase % 100) / 100.0
+        val width = 0.10
+
+        val numStops = 20
+        val stopsList = ArrayList<Expression.Stop>(numStops + 1)
+        for (i in 0..numStops) {
+            val progress = i.toDouble() / numStops
+            val minDist = Math.min(
+                Math.abs(progress - p1),
+                Math.min(Math.abs(progress - (p1 - 1.0)), Math.abs(progress - (p1 + 1.0)))
+            )
+            val colorHex = if (minDist < width) {
+                val factor = 1.0 - (minDist / width)
+                if (factor > 0.5) "#FBBF24" else "#FED7AA"
+            } else {
+                "#F28C28"
+            }
+            stopsList.add(Expression.stop(progress, Expression.color(android.graphics.Color.parseColor(colorHex))))
+        }
+
+        val gradientExpr = Expression.interpolate(
+            Expression.linear(),
+            Expression.lineProgress(),
+            *stopsList.toTypedArray()
+        )
+
+        val existingLayer = style.getLayer(layerId) as? LineLayer
+        val existingSource = style.getSource(sourceId) as? GeoJsonSource
+
+        if (existingLayer != null && existingSource != null && segments.isNotEmpty()) {
+            // High-Performance Fast Path: Update property on existing layer without rebuilding sources/layers or writing logcat spam
+            existingLayer.setProperties(PropertyFactory.lineGradient(gradientExpr))
+            return
+        }
+
+        // Full setup path when layer does not exist yet
         if (style.getLayer(flowLayerId) != null) style.removeLayer(flowLayerId)
         if (style.getLayer(layerId) != null) style.removeLayer(layerId)
         if (style.getSource(sourceId) != null) style.removeSource(sourceId)
@@ -367,59 +435,32 @@ private fun setupMapLibreRouteOverlay(
 
         if (lineFeatures.isNotEmpty()) {
             val featureCollection = FeatureCollection.fromFeatures(lineFeatures)
-
-            style.addSource(GeoJsonSource(sourceId, featureCollection))
+            style.addSource(GeoJsonSource(sourceId, featureCollection, GeoJsonOptions().withLineMetrics(true)))
 
             if (isSinglePoint) {
                 val circleLayer = CircleLayer(layerId, sourceId).apply {
                     setProperties(
                         PropertyFactory.circleRadius(16f),
-                        PropertyFactory.circleColor(android.graphics.Color.parseColor("#10B981")),
+                        PropertyFactory.circleColor(android.graphics.Color.parseColor("#1F513B")),
                         PropertyFactory.circleStrokeWidth(4f),
                         PropertyFactory.circleStrokeColor(android.graphics.Color.WHITE)
                     )
                 }
                 style.addLayer(circleLayer)
-                Log.d("HAKOT_ROUTE", "Added current location point marker successfully!")
             } else {
-                // 1. Royal Blue Route Base Line Layer (Slightly thicker: 7f)
                 val lineLayer = LineLayer(layerId, sourceId).apply {
                     setProperties(
-                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#1D4ED8")),
+                        PropertyFactory.lineGradient(gradientExpr),
                         PropertyFactory.lineWidth(7f),
                         PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
                     )
                 }
                 style.addLayer(lineLayer)
-
-                // 2. Animated Flowing Direction Stream Layer (5 frames, fewer dots reaching next dot)
-                val dashArray = when (flowPhase) {
-                    0 -> arrayOf(0.2f, 5.0f)
-                    1 -> arrayOf(1.4f, 3.8f)
-                    2 -> arrayOf(2.6f, 2.6f)
-                    3 -> arrayOf(3.8f, 1.4f)
-                    else -> arrayOf(5.0f, 0.2f)
-                }
-
-                val flowLayer = LineLayer(flowLayerId, sourceId).apply {
-                    setProperties(
-                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#60A5FA")),
-                        PropertyFactory.lineWidth(4f),
-                        PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
-                        PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
-                        PropertyFactory.lineDasharray(dashArray)
-                    )
-                }
-                style.addLayer(flowLayer)
-                Log.d("HAKOT_ROUTE", "Added animated route overlay with ${lineFeatures.size} features successfully!")
             }
-        } else {
-            Log.w("HAKOT_ROUTE", "Route overlay skipped: no valid segment line features.")
         }
     } catch (e: Exception) {
         Log.e("HAKOT_ROUTE", "Error setting up MapLibre route overlay", e)
-        e.printStackTrace()
     }
 }
 
@@ -471,7 +512,7 @@ private fun setupMapLibreRoadNetworkOverlay(
                 style.addSource(GeoJsonSource(selectedSourceId, FeatureCollection.fromFeatures(selectedFeatures)))
                 style.addLayer(LineLayer(selectedLayerId, selectedSourceId).apply {
                     setProperties(
-                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#3B82F6")),
+                        PropertyFactory.lineColor(android.graphics.Color.parseColor("#F28C28")),
                         PropertyFactory.lineWidth(8f),
                         PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)

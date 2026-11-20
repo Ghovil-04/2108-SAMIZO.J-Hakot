@@ -3,5 +3,7 @@
     <style name="Theme.Hakot" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">#0A0F18</item>
         <item name="android:windowSplashScreenBackground">#0A0F18</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>

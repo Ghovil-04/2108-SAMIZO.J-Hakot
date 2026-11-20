@@ -228,6 +228,22 @@ object HakotRepository {
 
     private fun generateDefaultSchedules() {
         schedules.clear()
+        val today = LocalDate.now()
+        schedules.add(
+            ScheduleItem(
+                id = "sch_default_01",
+                barangay = "Wawa → Bucana",
+                routeName = "J.P. Laurel St Route",
+                date = today,
+                startTime = LocalTime.of(8, 0),
+                endTime = LocalTime.of(11, 30),
+                wasteCategory = WasteCategory.GENERAL_WASTE,
+                truckAssigned = "Truck #01",
+                status = "Active",
+                dumpsiteName = "Nasugbu Dumpsite",
+                isWeeklyRepeat = true
+            )
+        )
     }
 
     suspend fun getValidAccessToken(context: Context): String? = refreshMutex.withLock {
@@ -1611,7 +1627,7 @@ object HakotRepository {
     }
 
     suspend fun fetchSchedulesFromSupabase(context: Context): Boolean {
-        val token = getValidAccessToken(context) ?: return false
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
         Log.d("HAKOT_ROUTE", "Fetching schedules from Supabase...")
 
         var fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("schedules?municipality_id=eq.${activeOrganization.municipalityId}", token)
