@@ -1,8 +1,11 @@
 package com.example.hakot.model
 
 import com.example.hakot.data.GisRoadSegmentFeature
+import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.LocalTime
+import java.util.Date
+import java.util.Locale
 
 enum class WasteCategory(val displayName: String, val colorHex: Long) {
     GENERAL_WASTE("General Waste (All Trash Accepted)", 0xFF10B981),
@@ -367,7 +370,7 @@ data class AnonymousReport(
 )
 
 enum class ApplicationStatus(val label: String) {
-    PENDING("Pending System Owner Review"),
+    PENDING("Pending Municipal Review"),
     APPROVED("Approved"),
     REJECTED("Rejected")
 }
@@ -387,3 +390,18 @@ data class AccountApplication(
     var status: ApplicationStatus = ApplicationStatus.PENDING,
     val createdAtMillis: Long = System.currentTimeMillis()
 )
+
+data class PasswordResetRequest(
+    val id: String,
+    val fullName: String,
+    val email: String,
+    val status: String = "PENDING",
+    val createdAtMillis: Long = System.currentTimeMillis()
+) {
+    val createdAtDisplay: String
+        get() {
+            val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+            return sdf.format(Date(createdAtMillis))
+        }
+}
+

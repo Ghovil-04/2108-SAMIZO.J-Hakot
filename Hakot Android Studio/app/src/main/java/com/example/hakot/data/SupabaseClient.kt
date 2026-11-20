@@ -432,7 +432,7 @@ object SupabaseClient {
             connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("apikey", SUPABASE_ANON_KEY)
-                // Send publishable key via apikey header ONLY; do not send as Authorization: Bearer for anonymous requests
+                setRequestProperty("Authorization", "Bearer $SUPABASE_ANON_KEY")
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Prefer", "return=minimal")
                 doOutput = true

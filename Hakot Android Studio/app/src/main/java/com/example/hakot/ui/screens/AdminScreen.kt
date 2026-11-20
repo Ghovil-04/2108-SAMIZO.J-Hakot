@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.UUID
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.hakot.ui.components.DarkMapView
@@ -78,6 +79,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.Email
@@ -217,15 +219,9 @@ fun AdminScreen(
         } else {
             val adminTabs = if (userRole == UserRole.SYSTEM_OWNER) {
                 listOf(
-                    "District Overview",
                     "Account Management",
                     "Account Applications",
-                    "Collection Schedule",
-                    "Schedule Audit",
-                    "Dumpsites",
-                    "Fleet Trucks",
-                    "Citizen Reports",
-                    "Audit History"
+                    "Reset Password Request"
                 )
             } else {
                 listOf(
@@ -238,6 +234,10 @@ fun AdminScreen(
                     "Citizen Reports",
                     "Audit History"
                 )
+            }
+
+            if (selectedAdminTab >= adminTabs.size) {
+                selectedAdminTab = 0
             }
 
             Column(
@@ -326,45 +326,38 @@ fun AdminScreen(
                         .fillMaxWidth()
                         .padding(16.dp)
                 ) {
-                    when (selectedAdminTab) {
-                        0 -> DistrictOverviewView(
-                            onRedeemCode = { showRedeemModal = true }
-                        )
-                        1 -> AdminAccountManagementView(
-                            onOpenCreateModal = { showCreateAccountModal = true }
-                        )
-                        2 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            SystemOwnerApplicationsReviewView()
-                        } else {
-                            CollectionScheduleDashboardView()
+                    if (userRole == UserRole.SYSTEM_OWNER) {
+                        when (selectedAdminTab) {
+                            0 -> AdminAccountManagementView(
+                                onOpenCreateModal = { showCreateAccountModal = true },
+                                onNavigateToApplications = { selectedAdminTab = 1 },
+                                onNavigateToResetRequests = { selectedAdminTab = 2 }
+                            )
+                            1 -> SystemOwnerApplicationsReviewView()
+                            2 -> SystemOwnerPasswordResetRequestsView()
+                            else -> AdminAccountManagementView(
+                                onOpenCreateModal = { showCreateAccountModal = true },
+                                onNavigateToApplications = { selectedAdminTab = 1 },
+                                onNavigateToResetRequests = { selectedAdminTab = 2 }
+                            )
                         }
-                        3 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            CollectionScheduleDashboardView()
-                        } else {
-                            AdminScheduleAuditView()
-                        }
-                        4 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            AdminScheduleAuditView()
-                        } else {
-                            AdminDumpsitesView()
-                        }
-                        5 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            AdminDumpsitesView()
-                        } else {
-                            AdminTrucksView()
-                        }
-                        6 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            AdminTrucksView()
-                        } else {
-                            AdminReportsView()
-                        }
-                        7 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            AdminReportsView()
-                        } else {
-                            AdminAuditLogsView()
-                        }
-                        8 -> if (userRole == UserRole.SYSTEM_OWNER) {
-                            AdminAuditLogsView()
+                    } else {
+                        when (selectedAdminTab) {
+                            0 -> DistrictOverviewView(
+                                onRedeemCode = { showRedeemModal = true }
+                            )
+                            1 -> AdminAccountManagementView(
+                                onOpenCreateModal = { showCreateAccountModal = true }
+                            )
+                            2 -> CollectionScheduleDashboardView()
+                            3 -> AdminScheduleAuditView()
+                            4 -> AdminDumpsitesView()
+                            5 -> AdminTrucksView()
+                            6 -> AdminReportsView()
+                            7 -> AdminAuditLogsView()
+                            else -> DistrictOverviewView(
+                                onRedeemCode = { showRedeemModal = true }
+                            )
                         }
                     }
                 }
@@ -541,6 +534,7 @@ fun SystemOwnerApplicationsReviewView() {
                             if (app.organizationName.isNotBlank()) {
                                 Text("Organization: ${app.organizationName} (${app.organizationType})", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
                             }
+                            Text("Requested Role: ${app.requestedRole.label}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                             Text("Municipality: ${app.municipality}", fontSize = 11.sp, color = TextOnDarkSecondary)
 
                             if (isExpanded) {
@@ -552,6 +546,7 @@ fun SystemOwnerApplicationsReviewView() {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text("• Organization Name: ${app.organizationName.ifBlank { "N/A" }}", fontSize = 11.sp, color = TextOnDarkSecondary)
                                 Text("• Organization Type: ${app.organizationType}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Text("• Requested Role: ${app.requestedRole.label}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                                 Text("• Municipality Scope: ${app.municipality}", fontSize = 11.sp, color = TextOnDarkSecondary)
                                 Text("• Administrator Full Name: ${app.fullName}", fontSize = 11.sp, color = TextOnDarkSecondary)
                                 Text("• Administrator Email: ${app.email}", fontSize = 11.sp, color = TextOnDarkSecondary)
@@ -564,7 +559,6 @@ fun SystemOwnerApplicationsReviewView() {
                                     ).toString()
                                 } catch (_: Exception) { "N/A" }
                                 Text("• Submission Date: $dateFormatted", fontSize = 11.sp, color = TextOnDarkSecondary)
-                                Text("• Requested Role: ${app.requestedRole.label}", fontSize = 11.sp, color = TextOnDarkSecondary)
 
                                 Spacer(modifier = Modifier.height(8.dp))
                             } else {
@@ -847,11 +841,175 @@ fun SystemOwnerApplicationsReviewView() {
 }
 
 @Composable
+fun SystemOwnerPasswordResetRequestsView() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val resetRequests = HakotRepository.passwordResetRequests
+
+    fun refreshRequests() {
+        scope.launch {
+            isLoading = true
+            errorMessage = null
+            val (ok, msg) = HakotRepository.fetchPasswordResetRequests(context)
+            isLoading = false
+            if (!ok) {
+                errorMessage = msg
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshRequests()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "RESET PASSWORD REQUESTS",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = EcoGreenLight
+                )
+                Text(
+                    text = "Review reset password applicants and mark as resolved",
+                    fontSize = 11.sp,
+                    color = TextOnDarkSecondary
+                )
+            }
+
+            IconButton(onClick = { refreshRequests() }) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = EcoGreenPrimary)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        errorMessage?.let { err ->
+            Text(err, color = HazardousRed, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+        }
+
+        if (isLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = EcoGreenPrimary)
+            }
+        } else if (resetRequests.isEmpty()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No pending reset password requests found.",
+                        fontSize = 13.sp,
+                        color = TextOnDarkMuted
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 20.dp)
+            ) {
+                items(resetRequests) { req ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = req.fullName,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextOnDarkPrimary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mail,
+                                        contentDescription = "Email",
+                                        tint = EcoGreenLight,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = req.email,
+                                        fontSize = 13.sp,
+                                        color = TextOnDarkSecondary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Requested: ${req.createdAtDisplay}",
+                                    fontSize = 11.sp,
+                                    color = TextOnDarkMuted
+                                )
+                            }
+
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val (ok, msg) = HakotRepository.resolvePasswordResetRequest(req.id, context)
+                                        if (ok) {
+                                            Toast.makeText(context, "Password reset request resolved and deleted.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Error: $msg", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Resolved", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun AdminLoginScreen(
-    onOpenRedeemModal: () -> Unit,
     onOpenRegistration: () -> Unit,
-    onOpenActivation: () -> Unit,
-    onExitAdminPortal: () -> Unit
+    onExitAdminPortal: () -> Unit,
+    onOpenRedeemModal: (() -> Unit)? = null,
+    onOpenActivation: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -860,6 +1018,14 @@ fun AdminLoginScreen(
     var isPasswordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    var showResetPasswordDialog by rememberSaveable { mutableStateOf(false) }
+    var showResetSuccessDialog by remember { mutableStateOf(false) }
+    var submittedEmailDisplay by remember { mutableStateOf("") }
+    var resetNameInput by rememberSaveable { mutableStateOf("") }
+    var resetGmailInput by rememberSaveable { mutableStateOf("") }
+    var isSubmittingReset by remember { mutableStateOf(false) }
+    var resetError by remember { mutableStateOf<String?>(null) }
 
     Box(
         modifier = Modifier
@@ -949,9 +1115,12 @@ fun AdminLoginScreen(
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = {
-                        Toast.makeText(context, "Password reset: Please contact your system administrator or check email instructions.", Toast.LENGTH_LONG).show()
+                        resetNameInput = ""
+                        resetGmailInput = emailInput.ifBlank { "" }
+                        resetError = null
+                        showResetPasswordDialog = true
                     }) {
-                        Text("Forgot Password?", fontSize = 11.sp, color = EcoGreenLight)
+                        Text("Reset Password", fontSize = 11.sp, color = EcoGreenLight)
                     }
                 }
 
@@ -999,15 +1168,6 @@ fun AdminLoginScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                TextButton(onClick = onOpenRedeemModal) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Key, contentDescription = "Code", tint = EcoGreenPrimary, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Redeem Invitation Code", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenPrimary)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
                 TextButton(onClick = onOpenRegistration) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(imageVector = Icons.Default.PersonAdd, contentDescription = "Register", tint = EcoGreenLight, modifier = Modifier.size(16.dp))
@@ -1016,18 +1176,180 @@ fun AdminLoginScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
-                TextButton(onClick = onOpenActivation) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Key, contentDescription = "Activate", tint = EcoGreenLight, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Have an Activation Code? Activate Account", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                    }
-                }
-
                 Spacer(modifier = Modifier.height(8.dp))
                 TextButton(onClick = onExitAdminPortal) {
                     Text("Return to Public Citizen Mode", fontSize = 12.sp, color = TextOnDarkMuted)
+                }
+            }
+        }
+
+        if (showResetPasswordDialog) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f))
+                    .clickable(enabled = true) { /* Consume background click */ },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .border(1.dp, EcoGreenPrimary, RoundedCornerShape(20.dp))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Request Password Reset",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = EcoGreenLight
+                        )
+                        Text(
+                            text = "Enter your full name and registered Gmail to submit a password reset request.",
+                            fontSize = 12.sp,
+                            color = TextOnDarkSecondary
+                        )
+                        OutlinedTextField(
+                            value = resetNameInput,
+                            onValueChange = { resetNameInput = it; resetError = null },
+                            label = { Text("Full Name") },
+                            placeholder = { Text("Juan Dela Cruz", color = TextOnDarkMuted) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = EcoGreenPrimary,
+                                unfocusedBorderColor = DarkBorder,
+                                focusedTextColor = TextOnDarkPrimary,
+                                unfocusedTextColor = TextOnDarkPrimary
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = resetGmailInput,
+                            onValueChange = { resetGmailInput = it; resetError = null },
+                            label = { Text("Gmail / Email") },
+                            placeholder = { Text("user@gmail.com", color = TextOnDarkMuted) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = EcoGreenPrimary,
+                                unfocusedBorderColor = DarkBorder,
+                                focusedTextColor = TextOnDarkPrimary,
+                                unfocusedTextColor = TextOnDarkPrimary
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        resetError?.let { err ->
+                            Text(err, color = HazardousRed, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { showResetPasswordDialog = false }) {
+                                Text("Cancel", color = TextOnDarkSecondary)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = {
+                                    if (resetNameInput.isBlank() || resetGmailInput.isBlank()) {
+                                        resetError = "Please enter both your name and Gmail."
+                                    } else {
+                                        scope.launch {
+                                            isSubmittingReset = true
+                                            val (success, msg) = HakotRepository.submitPasswordResetRequest(resetNameInput, resetGmailInput)
+                                            isSubmittingReset = false
+                                            if (success) {
+                                                submittedEmailDisplay = resetGmailInput.trim()
+                                                resetNameInput = ""
+                                                resetGmailInput = ""
+                                                resetError = null
+                                                showResetPasswordDialog = false
+                                                showResetSuccessDialog = true
+                                            } else {
+                                                resetError = msg
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = !isSubmittingReset,
+                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                if (isSubmittingReset) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
+                                } else {
+                                    Text("Submit Request", color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showResetSuccessDialog) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f))
+                    .clickable(enabled = true) { /* Consume background click */ },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.88f)
+                        .border(1.dp, EcoGreenPrimary, RoundedCornerShape(20.dp))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Success",
+                            tint = EcoGreenPrimary,
+                            modifier = Modifier.size(48.dp)
+                        )
+
+                        Text(
+                            text = "Request Submitted!",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = EcoGreenLight,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Text(
+                            text = "Your password reset request for $submittedEmailDisplay has been submitted successfully.\n\nThe System Owner will review your request and reset your account credentials.",
+                            fontSize = 12.sp,
+                            color = TextOnDarkSecondary,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Button(
+                            onClick = { showResetSuccessDialog = false },
+                            colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                        ) {
+                            Text(
+                                text = "OK",
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -2187,16 +2509,27 @@ fun DistrictOverviewView(
 
 @Composable
 fun AdminAccountManagementView(
-    onOpenCreateModal: () -> Unit
+    onOpenCreateModal: () -> Unit,
+    onNavigateToApplications: () -> Unit = {},
+    onNavigateToResetRequests: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     var selectedRoleFilter by remember { mutableStateOf<UserRole?>(null) }
     var selectedStatusFilter by remember { mutableStateOf<AdminStatus?>(null) }
     var selectedSubTab by remember { mutableIntStateOf(0) }
 
     var selectedAccountForDetails by remember { mutableStateOf<AdminUserProfile?>(null) }
+    var selectedAccountForDelete by remember { mutableStateOf<AdminUserProfile?>(null) }
+    var isDeletingAccount by remember { mutableStateOf(false) }
     var selectedInvitationForDetails by remember { mutableStateOf<AccountInvitation?>(null) }
+
+    LaunchedEffect(Unit) {
+        scope.launch { HakotRepository.fetchAdminProfiles(context) }
+        scope.launch { HakotRepository.fetchAccountApplications() }
+        scope.launch { HakotRepository.fetchPasswordResetRequests(context) }
+    }
 
     val totalAdmins = HakotRepository.adminProfiles.count {
         it.role == UserRole.MUNICIPAL_ADMIN || it.role == UserRole.DISTRICT_ADMIN || it.role == UserRole.SYSTEM_OWNER
@@ -2205,54 +2538,114 @@ fun AdminAccountManagementView(
     val pendingCount = HakotRepository.accountInvitations.count { it.status == AdminStatus.PENDING_INVITATION }
     val suspendedCount = HakotRepository.adminProfiles.count { it.status == AdminStatus.SUSPENDED }
 
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 20.dp)
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                MetricCard(title = "Total Admins", value = "$totalAdmins", color = EcoGreenPrimary, modifier = Modifier.weight(1f))
-                MetricCard(title = "Active Accounts", value = "$activeCount", color = EcoGreenLight, modifier = Modifier.weight(1f))
-                MetricCard(title = "Pending Invites", value = "$pendingCount", color = RecycleYellow, modifier = Modifier.weight(1f))
-                MetricCard(title = "Suspended", value = "$suspendedCount", color = HazardousRed, modifier = Modifier.weight(1f))
-            }
-        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 20.dp)
+        ) {
+            item {
+                if (HakotRepository.currentAdminRole == UserRole.SYSTEM_OWNER) {
+                    val applicantsCount = HakotRepository.accountApplications.size
+                    val activeAccountsCount = HakotRepository.adminProfiles.count { it.status == AdminStatus.ACTIVE && it.role != UserRole.SYSTEM_OWNER }
+                    val resetRequestsCount = HakotRepository.passwordResetRequests.size
 
-        item {
-            Card(
-                onClick = onOpenCreateModal,
-                colors = CardDefaults.cardColors(containerColor = EcoGreenContainer),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, EcoGreenPrimary, RoundedCornerShape(14.dp))
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PersonAdd,
-                        contentDescription = "Invite Account",
-                        tint = EcoGreenPrimary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "+ INVITE MUNICIPAL ACCOUNT VIA EMAIL",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = EcoGreenLight
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Card(
+                            onClick = onNavigateToApplications,
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(1.dp, EcoGreenPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("Applicants", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("$applicantsCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = RecycleYellow)
+                            }
+                        }
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("Active Accounts", fontSize = 11.sp, color = TextOnDarkSecondary)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("$activeAccountsCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            }
+                        }
+
+                        Card(
+                            onClick = onNavigateToResetRequests,
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(1.dp, EcoGreenPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("Reset Password Request", fontSize = 10.sp, color = TextOnDarkSecondary, maxLines = 1)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("$resetRequestsCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = HazardousRed)
+                            }
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        MetricCard(title = "Total Admins", value = "$totalAdmins", color = EcoGreenPrimary, modifier = Modifier.weight(1f))
+                        MetricCard(title = "Active Accounts", value = "$activeCount", color = EcoGreenLight, modifier = Modifier.weight(1f))
+                        MetricCard(title = "Pending Invites", value = "$pendingCount", color = RecycleYellow, modifier = Modifier.weight(1f))
+                        MetricCard(title = "Suspended", value = "$suspendedCount", color = HazardousRed, modifier = Modifier.weight(1f))
+                    }
                 }
             }
-        }
 
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (HakotRepository.currentAdminRole != UserRole.SYSTEM_OWNER) {
+                item {
+                    Card(
+                        onClick = onOpenCreateModal,
+                        colors = CardDefaults.cardColors(containerColor = EcoGreenContainer),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, EcoGreenPrimary, RoundedCornerShape(14.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PersonAdd,
+                                contentDescription = "Invite Account",
+                                tint = EcoGreenPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "+ INVITE MUNICIPAL ACCOUNT VIA EMAIL",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = EcoGreenLight
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -2267,48 +2660,10 @@ fun AdminAccountManagementView(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { selectedSubTab = 0 },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (selectedSubTab == 0) EcoGreenPrimary else DarkSurfaceCard
-                        ),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = "Active Accounts (${HakotRepository.adminProfiles.size})",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (selectedSubTab == 0) Color.Black else TextOnDarkPrimary
-                        )
-                    }
-
-                    Button(
-                        onClick = { selectedSubTab = 1 },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (selectedSubTab == 1) EcoGreenPrimary else DarkSurfaceCard
-                        ),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = "Pending Invites (${HakotRepository.accountInvitations.size})",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (selectedSubTab == 1) Color.Black else TextOnDarkPrimary
-                        )
-                    }
-                }
             }
-        }
 
-        if (selectedSubTab == 0) {
             val filteredProfiles = HakotRepository.adminProfiles.filter { prof ->
+                val notSystemOwner = prof.role != UserRole.SYSTEM_OWNER
                 val matchesSearch = searchQuery.isBlank() ||
                         prof.fullName.contains(searchQuery, ignoreCase = true) ||
                         prof.email.contains(searchQuery, ignoreCase = true) ||
@@ -2318,7 +2673,7 @@ fun AdminAccountManagementView(
                 val matchesRole = selectedRoleFilter == null || prof.role == selectedRoleFilter
                 val matchesStatus = selectedStatusFilter == null || prof.status == selectedStatusFilter
 
-                matchesSearch && matchesRole && matchesStatus
+                notSystemOwner && matchesSearch && matchesRole && matchesStatus
             }
 
             if (filteredProfiles.isEmpty()) {
@@ -2340,141 +2695,213 @@ fun AdminAccountManagementView(
                 items(filteredProfiles) { prof ->
                     AccountCardItem(
                         profile = prof,
-                        onClick = { selectedAccountForDetails = prof }
-                    )
-                }
-            }
-        } else {
-            val filteredInvitations = HakotRepository.accountInvitations.filter { inv ->
-                searchQuery.isBlank() ||
-                        inv.intendedName.contains(searchQuery, ignoreCase = true) ||
-                        inv.intendedEmail.contains(searchQuery, ignoreCase = true) ||
-                        inv.positionTitle.contains(searchQuery, ignoreCase = true)
-            }
-
-            if (filteredInvitations.isEmpty()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "No pending email invitations found.",
-                            fontSize = 12.sp,
-                            color = TextOnDarkMuted
-                        )
-                    }
-                }
-            } else {
-                items(filteredInvitations) { inv ->
-                    InvitationCardItem(
-                        invitation = inv,
-                        onClick = { selectedInvitationForDetails = inv }
+                        onClick = { selectedAccountForDetails = prof },
+                        onDelete = { selectedAccountForDelete = prof }
                     )
                 }
             }
         }
-    }
 
-    if (selectedAccountForDetails != null) {
-        AccountDetailsModal(
-            profile = selectedAccountForDetails!!,
-            onDismiss = { selectedAccountForDetails = null }
-        )
-    }
+        if (selectedAccountForDetails != null) {
+            val currentProfile = selectedAccountForDetails!!
+            AccountDetailsModal(
+                profile = currentProfile,
+                onDismiss = { selectedAccountForDetails = null },
+                onDeleteRequest = {
+                    selectedAccountForDetails = null
+                    selectedAccountForDelete = currentProfile
+                }
+            )
+        }
 
-    if (selectedInvitationForDetails != null) {
-        InvitationDetailsModal(
-            invitation = selectedInvitationForDetails!!,
-            onDismiss = { selectedInvitationForDetails = null }
-        )
+        if (selectedAccountForDelete != null) {
+            val targetProf = selectedAccountForDelete!!
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f))
+                    .clickable(enabled = true) { selectedAccountForDelete = null },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.88f)
+                        .border(1.dp, HazardousRed, RoundedCornerShape(20.dp))
+                        .clickable(enabled = false) { /* Consume clicks */ }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(22.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text(
+                            text = "Confirm Account Deletion",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = HazardousRed
+                        )
+
+                        Text(
+                            text = "Are you sure you want to permanently delete the administrator account for ${targetProf.fullName} (${targetProf.email})?\n\nThis action will permanently remove the account from the database and cannot be undone.",
+                            fontSize = 12.sp,
+                            color = TextOnDarkSecondary
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { selectedAccountForDelete = null },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text("No, Cancel", color = TextOnDarkSecondary, fontWeight = FontWeight.Bold)
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isDeletingAccount = true
+                                        val (ok, msg) = HakotRepository.deleteAdminProfile(targetProf.userId, targetProf.email, context)
+                                        isDeletingAccount = false
+                                        selectedAccountForDelete = null
+                                        if (ok) {
+                                            Toast.makeText(context, "Account deleted successfully from database.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Error deleting account: $msg", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                enabled = !isDeletingAccount,
+                                colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                if (isDeletingAccount) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                } else {
+                                    Text("Yes, Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
 fun AccountCardItem(
     profile: AdminUserProfile,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Card(
-        onClick = onClick,
         colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
             .fillMaxWidth()
             .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.padding(14.dp)
         ) {
-            Box(
+            Row(
                 modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(EcoGreenContainer),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .clickable(onClick = onClick),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.AdminPanelSettings,
-                    contentDescription = "User Avatar",
-                    tint = EcoGreenPrimary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(EcoGreenContainer),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = profile.fullName,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextOnDarkPrimary
+                    Icon(
+                        imageVector = Icons.Default.AdminPanelSettings,
+                        contentDescription = "User Avatar",
+                        tint = EcoGreenPrimary,
+                        modifier = Modifier.size(24.dp)
                     )
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(
-                                when (profile.status) {
-                                    AdminStatus.ACTIVE -> EcoGreenContainer
-                                    AdminStatus.SUSPENDED -> Color(0xFF450A0A)
-                                    else -> DarkSurfaceVariant
-                                }
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = profile.status.label,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when (profile.status) {
-                                AdminStatus.ACTIVE -> EcoGreenLight
-                                AdminStatus.SUSPENDED -> HazardousRed
-                                else -> TextOnDarkMuted
-                            }
-                        )
-                    }
                 }
 
-                Text(
-                    text = "${profile.role.label} • ${profile.positionTitle}",
-                    fontSize = 11.sp,
-                    color = EcoGreenLight
-                )
-                Text(
-                    text = "${profile.email} • ${profile.municipalityName}",
-                    fontSize = 10.sp,
-                    color = TextOnDarkSecondary
-                )
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = profile.fullName,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnDarkPrimary
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    when (profile.status) {
+                                        AdminStatus.ACTIVE -> EcoGreenContainer
+                                        AdminStatus.SUSPENDED -> Color(0xFF450A0A)
+                                        else -> DarkSurfaceVariant
+                                    }
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = profile.status.label,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when (profile.status) {
+                                    AdminStatus.ACTIVE -> EcoGreenLight
+                                    AdminStatus.SUSPENDED -> HazardousRed
+                                    else -> TextOnDarkMuted
+                                }
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "${profile.role.label} • ${profile.positionTitle}",
+                        fontSize = 11.sp,
+                        color = EcoGreenLight
+                    )
+                    Text(
+                        text = "${profile.email} • ${profile.municipalityName}",
+                        fontSize = 10.sp,
+                        color = TextOnDarkSecondary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(DarkBorder))
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = onClick,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("View Full Details", fontSize = 11.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
@@ -2754,92 +3181,99 @@ fun CreateAccountModal(
 // ACCOUNT DETAILS MODAL SHEET
 // ----------------------------------------------------------------------------
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AccountDetailsModal(
     profile: AdminUserProfile,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDeleteRequest: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = DarkSurface
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.75f))
+            .clickable(enabled = true) { onDismiss() },
+        contentAlignment = Alignment.Center
     ) {
-        Column(
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+            shape = RoundedCornerShape(20.dp),
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 10.dp)
+                .fillMaxWidth(0.92f)
+                .border(1.dp, EcoGreenPrimary, RoundedCornerShape(20.dp))
+                .clickable(enabled = false) { /* Consume clicks */ }
         ) {
-            Text(
-                text = "Account Details & Permissions",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextOnDarkPrimary
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text("Full Name: ${profile.fullName}", fontSize = 14.sp, color = TextOnDarkPrimary, fontWeight = FontWeight.Bold)
-            Text("Email: ${profile.email}", fontSize = 12.sp, color = TextOnDarkSecondary)
-            Text("Role: ${profile.role.label}", fontSize = 12.sp, color = EcoGreenLight)
-            Text("Municipality: ${profile.municipalityName}", fontSize = 12.sp, color = TextOnDarkSecondary)
-            Text("Position: ${profile.positionTitle} (${profile.officeDepartment})", fontSize = 12.sp, color = TextOnDarkSecondary)
-            Text("Status: ${profile.status.label}", fontSize = 12.sp, color = if (profile.status == AdminStatus.ACTIVE) EcoGreenLight else HazardousRed)
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            Text("Account Actions:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkMuted)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (profile.status == AdminStatus.ACTIVE) {
-                    Button(
-                        onClick = {
-                            HakotRepository.suspendAccount(profile.userId)
-                            Toast.makeText(context, "Account Suspended (Backend Pending)", Toast.LENGTH_SHORT).show()
-                            onDismiss()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Suspend", fontSize = 12.sp, color = Color.White)
-                    }
-                } else {
-                    Button(
-                        onClick = {
-                            HakotRepository.reactivateAccount(profile.userId)
-                            Toast.makeText(context, "Account Reactivated (Backend Pending)", Toast.LENGTH_SHORT).show()
-                            onDismiss()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Reactivate", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Account Details & Permissions",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = EcoGreenLight
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkSecondary)
                     }
                 }
 
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("Full Name: ${profile.fullName}", fontSize = 14.sp, color = TextOnDarkPrimary, fontWeight = FontWeight.Bold)
+                        Text("Email: ${profile.email}", fontSize = 12.sp, color = TextOnDarkSecondary)
+                        Text("Role: ${profile.role.label}", fontSize = 12.sp, color = EcoGreenLight, fontWeight = FontWeight.SemiBold)
+                        Text("Position: ${profile.positionTitle}", fontSize = 12.sp, color = TextOnDarkSecondary)
+                        Text("Department: ${profile.officeDepartment}", fontSize = 12.sp, color = TextOnDarkSecondary)
+                        Text("Municipality: ${profile.municipalityName}", fontSize = 12.sp, color = TextOnDarkSecondary)
+                        Text("District Scope: ${profile.districtName}", fontSize = 12.sp, color = TextOnDarkSecondary)
+                        Text("Registration Date: ${profile.registrationDate}", fontSize = 12.sp, color = TextOnDarkMuted)
+                        Text("Status: ${profile.status.label}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (profile.status == AdminStatus.ACTIVE) EcoGreenLight else HazardousRed)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                 Button(
                     onClick = {
-                        HakotRepository.revokeAccount(profile.userId)
-                        Toast.makeText(context, "Account Revoked (Backend Pending)", Toast.LENGTH_SHORT).show()
-                        onDismiss()
+                        onDeleteRequest()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceCard),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.weight(1f)
+                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
                 ) {
-                    Text("Revoke", fontSize = 12.sp, color = HazardousRed)
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("DELETE ACCOUNT", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                }
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }

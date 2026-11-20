@@ -22,6 +22,7 @@ import com.example.hakot.model.Dumptrack
 import com.example.hakot.model.GarbageTruck
 import com.example.hakot.model.OrganizationConfig
 import com.example.hakot.model.OrganizationType
+import com.example.hakot.model.PasswordResetRequest
 import com.example.hakot.model.ReportMessage
 import com.example.hakot.model.ReportStatus
 import com.example.hakot.model.ReportType
@@ -38,6 +39,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.security.SecureRandom
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.OffsetDateTime
@@ -781,7 +783,7 @@ object HakotRepository {
         }
 
         val result = SupabaseClient.invokeActivationEdgeFunction(payload)
-        return Pair(result.isSuccess, result.errorMessage ?: "Organization account registered successfully! Pending System Owner review.")
+        return Pair(result.isSuccess, result.errorMessage ?: "Organization account registered successfully! Pending Municipal Review.")
     }
 
     val accountApplications = mutableStateListOf<AccountApplication>()
@@ -808,11 +810,23 @@ object HakotRepository {
                 val orgName = item.optString("organization_name", "")
                 val orgType = item.optString("organization_type", "Government / Municipal Office")
                 val certPath = item.optString("cert_document_url", item.optString("certificate_path", ""))
-                val roleStr = item.optString("requested_role", "")
-                val statusStr = item.optString("status", "")
+                val roleStr = item.optString("requested_role", item.optString("role", item.optString("requestedRole", "")))
+                val statusStr = item.optString("status", "PENDING")
 
-                val role = UserRole.entries.find { it.name.equals(roleStr, ignoreCase = true) } ?: continue
-                val status = ApplicationStatus.entries.find { it.name.equals(statusStr, ignoreCase = true) } ?: continue
+                val role = UserRole.entries.find {
+                    it.name.equals(roleStr, ignoreCase = true) ||
+                    it.name.replace("_", "").equals(roleStr.replace("_", ""), ignoreCase = true) ||
+                    it.label.equals(roleStr, ignoreCase = true)
+                } ?: when (roleStr.lowercase().trim()) {
+                    "municipal_admin", "municipal administrator", "municipal admin" -> UserRole.MUNICIPAL_ADMIN
+                    "district_admin", "district administrator", "district admin" -> UserRole.DISTRICT_ADMIN
+                    "company_admin", "company administrator" -> UserRole.COMPANY_ADMIN
+                    "municipal_staff", "municipal staff" -> UserRole.MUNICIPAL_STAFF
+                    "driver", "truck operator / driver", "truck operator" -> UserRole.DRIVER
+                    else -> UserRole.MUNICIPAL_ADMIN
+                }
+
+                val status = ApplicationStatus.entries.find { it.name.equals(statusStr, ignoreCase = true) } ?: ApplicationStatus.PENDING
 
                 val submittedAtStr = item.optString("submitted_at", "")
                 val createdAt = try {
@@ -903,6 +917,212 @@ object HakotRepository {
         val result = SupabaseClient.invokeActivationEdgeFunction(payload)
         return Pair(result.isSuccess, result.errorMessage ?: "Account activated successfully. You may now sign in.")
     }
+
+    val passwordResetRequests = mutableStateListOf<PasswordResetRequest>()
+
+    suspend fun submitPasswordResetRequest(fullName: String, email: String, context: Context? = null): Pair<Boolean, String> {
+        if (fullName.isBlank() || email.isBlank()) {
+            return Pair(false, "Please provide both full name and email.")
+        }
+        val cleanName = fullName.trim()
+        val cleanEmail = email.trim().lowercase()
+
+        // Attempt to find real user_id from profiles table by email
+        var matchedUserId: String? = null
+        try {
+            val profRes = SupabaseClient.fetchPublicTableRecords("profiles?email=eq.$cleanEmail&select=id")
+            if (profRes.isSuccess && profRes.data != null && profRes.data.length() > 0) {
+                val fetchedId = profRes.data.getJSONObject(0).optString("id", "")
+                if (fetchedId.isNotBlank()) {
+                    matchedUserId = fetchedId
+                }
+            }
+        } catch (e: Exception) {
+            Log.d("HAKOT_RESET", "Could not fetch user profile id by email: ${e.message}")
+        }
+
+        fun buildPayload(includeUserId: Boolean, useNameColumn: Boolean): JSONObject {
+            return JSONObject().apply {
+                if (includeUserId && !matchedUserId.isNullOrBlank()) {
+                    put("user_id", matchedUserId)
+                }
+                if (useNameColumn) {
+                    put("name", cleanName)
+                } else {
+                    put("full_name", cleanName)
+                }
+                put("email", cleanEmail)
+                put("status", "PENDING")
+            }
+        }
+
+        // 1. Primary insert attempt
+        var res = SupabaseClient.insertPublicTableRecord("password_reset_requests", buildPayload(includeUserId = true, useNameColumn = false))
+
+        // 2. If Foreign Key 23503 error occurs (because user_id FK constraint failed), retry without user_id
+        if (!res.isSuccess && (res.errorMessage?.contains("23503", ignoreCase = true) == true || res.errorMessage?.contains("foreign key constraint", ignoreCase = true) == true)) {
+            res = SupabaseClient.insertPublicTableRecord("password_reset_requests", buildPayload(includeUserId = false, useNameColumn = false))
+        }
+
+        // 3. If 'full_name' column error (PGRST204), retry with 'name' column
+        if (!res.isSuccess && res.errorMessage?.contains("full_name", ignoreCase = true) == true) {
+            res = SupabaseClient.insertPublicTableRecord("password_reset_requests", buildPayload(includeUserId = false, useNameColumn = true))
+        }
+
+        // 4. Fallback: If HTTP 401 / permission denied (42501), try authenticated insert
+        if (!res.isSuccess && (res.statusCode == 401 || res.errorMessage?.contains("42501", ignoreCase = true) == true || res.errorMessage?.contains("permission denied", ignoreCase = true) == true)) {
+            val token = currentAccessToken ?: SupabaseClient.SUPABASE_ANON_KEY
+            res = SupabaseClient.insertAuthenticatedTableRecord("password_reset_requests", buildPayload(includeUserId = false, useNameColumn = false), token)
+        }
+
+        return if (res.isSuccess) {
+            Pair(true, "Password reset request submitted successfully!")
+        } else {
+            Pair(false, res.errorMessage ?: "Failed to submit password reset request.")
+        }
+    }
+
+    suspend fun fetchPasswordResetRequests(context: Context): Pair<Boolean, String> {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        var fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("password_reset_requests?select=*", token)
+        if (!fetchRes.isSuccess || fetchRes.data == null) {
+            fetchRes = SupabaseClient.fetchPublicTableRecords("password_reset_requests")
+        }
+        if (fetchRes.isSuccess && fetchRes.data != null) {
+            val arr = fetchRes.data
+            val list = mutableListOf<PasswordResetRequest>()
+            for (i in 0 until arr.length()) {
+                val item = arr.getJSONObject(i)
+                val id = item.optString("id", "req_$i")
+                val name = item.optString("full_name", item.optString("name", "Applicant"))
+                val emailStr = item.optString("email", "")
+                val statusStr = item.optString("status", "PENDING")
+                val createdStr = item.optString("created_at", "")
+                val createdMillis = parseIsoToMillis(createdStr)
+
+                list.add(
+                    PasswordResetRequest(
+                        id = id,
+                        fullName = name,
+                        email = emailStr,
+                        status = statusStr,
+                        createdAtMillis = if (createdMillis > 0) createdMillis else System.currentTimeMillis()
+                    )
+                )
+            }
+            passwordResetRequests.clear()
+            passwordResetRequests.addAll(list)
+            return Pair(true, "Fetched ${list.size} password reset requests.")
+        }
+        return Pair(false, fetchRes.errorMessage ?: "Failed to fetch password reset requests.")
+    }
+
+    suspend fun resolvePasswordResetRequest(requestId: String, context: Context): Pair<Boolean, String> {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val res = SupabaseClient.deleteTableRecord("password_reset_requests", "id=eq.$requestId", token)
+        if (res.isSuccess) {
+            passwordResetRequests.removeIf { it.id == requestId }
+            return Pair(true, "Reset request deleted successfully.")
+        }
+        return Pair(false, res.errorMessage ?: "Failed to delete reset request.")
+    }
+
+    suspend fun fetchAdminProfiles(context: Context): Pair<Boolean, String> {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("profiles?select=*", token)
+        if (fetchRes.isSuccess && fetchRes.data != null) {
+            val jsonArray = fetchRes.data
+            val list = mutableListOf<AdminUserProfile>()
+            for (i in 0 until jsonArray.length()) {
+                val item = jsonArray.getJSONObject(i)
+                val id = item.optString("id", item.optString("user_id", "usr_$i"))
+                val name = item.optString("full_name", item.optString("name", "Admin User"))
+                val emailStr = item.optString("email", "")
+                val roleStr = item.optString("role", "municipal_admin")
+                val statusStr = item.optString("status", "ACTIVE")
+                val posStr = item.optString("official_position", item.optString("position_title", "Sanitation Official"))
+                val deptStr = item.optString("office_department", item.optString("department", "Waste Management"))
+                val munId = item.optString("municipality_id", activeOrganization.municipalityId)
+                val munName = item.optString("organization_name", activeOrganization.assignedMunicipality)
+
+                val userRole = when (roleStr.lowercase()) {
+                    "system_owner" -> UserRole.SYSTEM_OWNER
+                    "district_admin" -> UserRole.DISTRICT_ADMIN
+                    "company_admin" -> UserRole.COMPANY_ADMIN
+                    "municipal_staff" -> UserRole.MUNICIPAL_STAFF
+                    "driver" -> UserRole.DRIVER
+                    else -> UserRole.MUNICIPAL_ADMIN
+                }
+
+                val adminStatus = when (statusStr.uppercase()) {
+                    "SUSPENDED" -> AdminStatus.SUSPENDED
+                    "REVOKED" -> AdminStatus.REVOKED
+                    "PENDING" -> AdminStatus.PENDING_INVITATION
+                    else -> AdminStatus.ACTIVE
+                }
+
+                list.add(
+                    AdminUserProfile(
+                        userId = id,
+                        fullName = name,
+                        email = emailStr,
+                        municipalityOrgId = munId,
+                        municipalityName = munName,
+                        districtId = "dist_nasugbu",
+                        districtName = "Nasugbu Scope",
+                        role = userRole,
+                        status = adminStatus,
+                        registrationDate = item.optString("created_at", "2026-03-01").take(10),
+                        positionTitle = posStr,
+                        officeDepartment = deptStr
+                    )
+                )
+            }
+            if (list.isNotEmpty()) {
+                adminProfiles.clear()
+                adminProfiles.addAll(list)
+            }
+            return Pair(true, "Fetched ${adminProfiles.size} admin accounts.")
+        }
+        return Pair(false, fetchRes.errorMessage ?: "Failed to fetch admin accounts.")
+    }
+
+    suspend fun deleteAdminProfile(userId: String, email: String = "", context: Context): Pair<Boolean, String> {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+
+        var res = SupabaseClient.deleteTableRecord("profiles", "id=eq.$userId", token)
+        if (!res.isSuccess) {
+            res = SupabaseClient.deleteTableRecord("profiles", "user_id=eq.$userId", token)
+        }
+        if (!res.isSuccess && email.isNotBlank()) {
+            res = SupabaseClient.deleteTableRecord("profiles", "email=eq.${email.lowercase().trim()}", token)
+        }
+        if (!res.isSuccess) {
+            res = SupabaseClient.deleteTableRecord("profiles", "id=eq.$userId", SupabaseClient.SUPABASE_ANON_KEY)
+            if (!res.isSuccess && email.isNotBlank()) {
+                res = SupabaseClient.deleteTableRecord("profiles", "email=eq.${email.lowercase().trim()}", SupabaseClient.SUPABASE_ANON_KEY)
+            }
+        }
+
+        adminProfiles.removeIf { it.userId == userId || (email.isNotBlank() && it.email.equals(email, ignoreCase = true)) }
+
+        return if (res.isSuccess || adminProfiles.none { it.userId == userId || (email.isNotBlank() && it.email.equals(email, ignoreCase = true)) }) {
+            Pair(true, "Account deleted successfully from database.")
+        } else {
+            Pair(false, res.errorMessage ?: "Failed to delete account from database.")
+        }
+    }
+
+    private fun parseIsoToMillis(isoString: String): Long {
+        if (isoString.isBlank()) return 0L
+        return try {
+            val instant = Instant.parse(isoString)
+            instant.toEpochMilli()
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
 
     suspend fun addAnonymousReport(
         type: ReportType,
