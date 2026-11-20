@@ -340,7 +340,8 @@ data class ScheduleItem(
     var operational: Boolean = true,
     val orderedSegments: List<GisRoadSegmentFeature> = emptyList(),
     val completedDates: List<String> = emptyList(),
-    val dateStatuses: Map<String, String> = emptyMap()
+    val dateStatuses: Map<String, String> = emptyMap(),
+    val dumpsiteName: String = "Nasugbu MRF Facility"
 )
 
 data class ReportMessage(

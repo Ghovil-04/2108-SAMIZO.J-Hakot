@@ -1146,6 +1146,7 @@ object HakotRepository {
             put("reference_code", refCode)
             put("category", type.title)
             put("description", fullDescription)
+            put("municipality_id", activeOrganization.municipalityId)
             if (lat != null && lng != null) {
                 put("location", "SRID=4326;POINT($lng $lat)")
             }
@@ -1272,15 +1273,22 @@ object HakotRepository {
                 val list = mutableListOf<Dumptrack>()
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
+                    val tc = obj.optString("truck_code", "")
+                    val truckCode = if (tc.isBlank() || tc == "null") "Hakot Truck #${i+1}" else tc
+                    val pn = obj.optString("plate_number", "")
+                    val plateNumber = if (pn.isBlank() || pn == "null") "ABC-${1000 + i}" else pn
+                    val dn = obj.optString("driver_name", "")
+                    val driverName = if (dn.isBlank() || dn == "null") "Unassigned Driver" else dn
+
                     list.add(
                         Dumptrack(
                             id = obj.optString("id", "tr_$i"),
-                            truckCode = obj.optString("truck_code", "Hakot Truck #${i+1}"),
-                            plateNumber = obj.optString("plate_number", "ABK-8891"),
-                            driverName = obj.optString("driver_name", "Unassigned Driver"),
-                            assignedRoute = obj.optString("assigned_route", "Collection Route"),
-                            assignedBarangays = obj.optString("assigned_barangays", "Nasugbu Scope"),
-                            destinationDumpsite = obj.optString("destination_dumpsite", "Nasugbu MRF Facility"),
+                            truckCode = truckCode,
+                            plateNumber = plateNumber,
+                            driverName = driverName,
+                            assignedRoute = "Collection Route",
+                            assignedBarangays = "Nasugbu Scope",
+                            destinationDumpsite = "Nasugbu MRF Facility",
                             latitude = 14.0725,
                             longitude = 120.6335
                         )
@@ -1316,10 +1324,46 @@ object HakotRepository {
             if (!trucks.any { it.id == truck.id }) {
                 trucks.add(truck)
             }
+            logAuditAction(context, "Registered truck '${truck.truckCode}' (${truck.plateNumber})", "Trucks")
             return Pair(true, "Successfully saved truck to Supabase.")
         } else {
             return Pair(false, "Supabase Truck Error: ${res.errorMessage}")
         }
+    }
+
+    suspend fun deleteTruckFromSupabase(truckId: String, context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val res = SupabaseClient.deleteTableRecord("trucks", "id=eq.$truckId", token)
+        if (res.isSuccess) {
+            logAuditAction(context, "Deleted truck ID: $truckId", "Trucks")
+            return true
+        }
+        return false
+    }
+
+    suspend fun resolveCitizenReport(reportId: String, context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val res = SupabaseClient.deleteTableRecord("waste_reports", "id=eq.$reportId", token)
+        if (res.isSuccess) {
+            reports.removeIf { it.id == reportId }
+            logAuditAction(context, "Resolved & deleted citizen waste report", "Reports")
+            return true
+        }
+        return false
+    }
+
+    fun logAuditAction(context: Context, action: String, targetRecord: String) {
+        val email = authenticatedUser?.email?.ifBlank { null }
+            ?: currentDistrictAdmin.email.ifBlank { null }
+            ?: "admin@nasugbu.gov.ph"
+        val newLog = AuditLogEntry(
+            id = "audit_${System.currentTimeMillis()}",
+            actingUserEmail = email,
+            action = action,
+            targetRecord = targetRecord,
+            timestampMillis = System.currentTimeMillis()
+        )
+        auditLogs.add(0, newLog)
     }
 
     fun addRoute(route: CollectionRoute) {
@@ -1407,6 +1451,7 @@ object HakotRepository {
             put("route_name", schedule.routeName)
             put("barangay", schedule.barangay)
             put("truck_assigned", schedule.truckAssigned)
+            put("dumpsite_name", schedule.dumpsiteName)
             put("is_weekly_repeat", schedule.isWeeklyRepeat)
             if (schedule.recurrenceEndDate != null) {
                 put("recurrence_end_date", schedule.recurrenceEndDate.toString())
@@ -1546,6 +1591,7 @@ object HakotRepository {
             put("name", ds.name)
             put("type", ds.type)
             put("address", ds.address)
+            put("location", "POINT(${ds.longitude} ${ds.latitude})")
             put("latitude", ds.latitude)
             put("longitude", ds.longitude)
             put("capacity_percent", ds.capacityPercent)
@@ -1689,6 +1735,8 @@ object HakotRepository {
                         }
                     }
 
+                    val dumpsiteName = obj.optString("dumpsite_name", "").let { if (it.isBlank() || it == "null") "Nasugbu MRF Facility" else it }
+
                     list.add(
                         ScheduleItem(
                             id = obj.optString("id", "sch_$i"),
@@ -1704,7 +1752,8 @@ object HakotRepository {
                             recurrenceEndDate = parsedEndRecur,
                             isDisabled = obj.optBoolean("is_disabled", false),
                             orderedSegments = orderedSegs,
-                            completedDates = compDatesList
+                            completedDates = compDatesList,
+                            dumpsiteName = dumpsiteName
                         )
                     )
                 }

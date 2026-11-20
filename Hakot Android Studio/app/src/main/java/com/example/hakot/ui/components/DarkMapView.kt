@@ -92,7 +92,8 @@ fun DarkMapView(
     customRouteSegments: List<List<GeoPoint>> = emptyList(),
     onMapClick: ((LatLng) -> Unit)? = null,
     barangayRoads: List<GisRoadSegmentFeature> = emptyList(),
-    selectedRoadIds: List<String> = emptyList()
+    selectedRoadIds: List<String> = emptyList(),
+    autoCenterSinglePoint: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -144,7 +145,7 @@ fun DarkMapView(
                 if (fetchedRoutePoints.isNotEmpty()) {
                     try {
                         val validPts = fetchedRoutePoints.filter { it.longitude.isFinite() && it.latitude.isFinite() && it.longitude in -180.0..180.0 && it.latitude in -90.0..90.0 }
-                        if (validPts.size == 1) {
+                        if (validPts.size == 1 && autoCenterSinglePoint) {
                             val pt = validPts[0]
                             maplibreMap.easeCamera(CameraUpdateFactory.newLatLngZoom(LatLng(pt.latitude, pt.longitude), 16.0), 300)
                         } else if (validPts.size >= 2) {

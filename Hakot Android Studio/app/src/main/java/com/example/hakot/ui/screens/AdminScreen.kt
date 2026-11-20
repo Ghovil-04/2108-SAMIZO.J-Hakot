@@ -27,6 +27,8 @@ import java.util.UUID
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.input.pointer.pointerInput
 import com.example.hakot.ui.components.DarkMapView
 import com.example.hakot.model.Route
 import com.example.hakot.model.Dumptrack
@@ -74,7 +76,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CheckCircle
@@ -173,6 +177,7 @@ import java.text.SimpleDateFormat
 import java.time.DayOfWeek
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
@@ -188,6 +193,15 @@ fun AdminScreen(
     var showCreateAccountModal by remember { mutableStateOf(false) }
     var showRegistrationScreen by remember { mutableStateOf(false) }
     var showActivationScreen by remember { mutableStateOf(false) }
+
+    var liveClockString by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val sdf = SimpleDateFormat("hh:mm:ss a", Locale.getDefault())
+            liveClockString = sdf.format(Date())
+            delay(1000)
+        }
+    }
 
     val isAuthenticated = HakotRepository.isAuthenticated
     val userRole = HakotRepository.currentAdminRole
@@ -272,9 +286,12 @@ fun AdminScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = TextOnDarkPrimary
                                 )
+                                val dateFmt = DateTimeFormatter.ofPattern("MMM dd, yyyy", Locale.getDefault())
+                                val dateText = LocalDate.now().format(dateFmt)
                                 Text(
-                                    text = HakotRepository.currentDistrictAdmin.districtName,
-                                    fontSize = 11.sp,
+                                    text = "$dateText • 🕒 $liveClockString",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
                                     color = EcoGreenLight
                                 )
                             }
@@ -343,21 +360,17 @@ fun AdminScreen(
                         }
                     } else {
                         when (selectedAdminTab) {
-                            0 -> DistrictOverviewView(
-                                onRedeemCode = { showRedeemModal = true }
-                            )
+                            0 -> DistrictOverviewView()
                             1 -> AdminAccountManagementView(
                                 onOpenCreateModal = { showCreateAccountModal = true }
                             )
-                            2 -> CollectionScheduleDashboardView()
+                            2 -> CollectionScheduleDashboardView(onNavigateToDumpsites = { selectedAdminTab = 4 })
                             3 -> AdminScheduleAuditView()
                             4 -> AdminDumpsitesView()
                             5 -> AdminTrucksView()
                             6 -> AdminReportsView()
                             7 -> AdminAuditLogsView()
-                            else -> DistrictOverviewView(
-                                onRedeemCode = { showRedeemModal = true }
-                            )
+                            else -> DistrictOverviewView()
                         }
                     }
                 }
@@ -2320,6 +2333,7 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                         
                         val truckDisplay = if (sch.truckAssigned.isBlank() || sch.truckAssigned.contains("Unassigned", ignoreCase = true) || sch.truckAssigned.contains("No assigned", ignoreCase = true) || sch.truckAssigned.contains("Dump Truck", ignoreCase = true)) "No assigned truck yet" else sch.truckAssigned
                         Text("Assigned Truck: $truckDisplay", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("Assigned Dumpsite: ${sch.dumpsiteName}", fontSize = 12.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
                         Text("Status: ${sch.status}", fontSize = 12.sp, color = TextOnDarkPrimary)
 
                         Spacer(modifier = Modifier.height(6.dp))
@@ -2378,17 +2392,35 @@ fun MetricCard(
         Column(modifier = Modifier.padding(10.dp)) {
             Text(title, fontSize = 10.sp, color = TextOnDarkMuted)
             Spacer(modifier = Modifier.height(4.dp))
-            Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = color)
+            Text(value, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = color)
         }
     }
 }
 
 @Composable
-fun DistrictOverviewView(
-    onRedeemCode: () -> Unit
-) {
+fun DistrictOverviewView() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val admin = HakotRepository.currentDistrictAdmin
     val org = HakotRepository.activeOrganization
+    val realName = HakotRepository.authenticatedUser?.fullName?.ifBlank { HakotRepository.currentAdminName }?.ifBlank { admin.fullName }
+
+    var selectedMapDate by remember { mutableStateOf(LocalDate.now(ZoneId.systemDefault())) }
+
+    LaunchedEffect(Unit) {
+        scope.launch {
+            HakotRepository.fetchSchedulesFromSupabase(context)
+            HakotRepository.fetchTrucksFromSupabase(context)
+        }
+    }
+
+    val activeSchedules = HakotRepository.schedules.count { sch ->
+        !sch.isDisabled && (sch.status.equals("ACTIVE", ignoreCase = true) || sch.status.equals("ACTIVE_ON_ROUTE", ignoreCase = true))
+    }
+    val completedSchedules = HakotRepository.schedules.count { it.status.equals("COMPLETED", true) || it.completedDates.isNotEmpty() }
+    val missedSchedules = HakotRepository.schedules.count { it.status.equals("MISSED", true) || !it.operational }
+
+    val resolvedMunicipality = admin.municipalityName.ifBlank { org.assignedMunicipality }
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -2402,47 +2434,48 @@ fun DistrictOverviewView(
                     .fillMaxWidth()
                     .border(1.dp, EcoGreenPrimary.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text(
-                                text = admin.fullName,
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextOnDarkPrimary
-                            )
-                            Text(
-                                text = admin.email,
-                                fontSize = 12.sp,
-                                color = TextOnDarkSecondary
-                            )
-                        }
+                        Text(
+                            text = "Account Information",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = EcoGreenLight
+                        )
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(EcoGreenContainer)
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
                         ) {
-                            Text(admin.status.label, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Text(admin.status.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
 
                     Text(
-                        text = "🏛️ Assigned Municipality: ${org.name}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        text = "Name: $realName",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
                         color = TextOnDarkPrimary
                     )
                     Text(
-                        text = "📍 Scope: ${admin.districtName}",
+                        text = "Gmail: ${admin.email}",
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
+                        color = TextOnDarkSecondary
+                    )
+                    Text(
+                        text = "Municipality: $resolvedMunicipality",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
                         color = EcoGreenLight
                     )
                 }
@@ -2454,51 +2487,103 @@ fun DistrictOverviewView(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                MetricCard(title = "Barangays", value = "${org.coveredBarangays.size} Covered", color = EcoGreenPrimary, modifier = Modifier.weight(1f))
-                MetricCard(title = "Assigned Trucks", value = "${HakotRepository.trucks.size} Trucks", color = RecycleYellow, modifier = Modifier.weight(1f))
-                MetricCard(title = "Active Routes", value = "${HakotRepository.routes.size} Corridors", color = EcoGreenLight, modifier = Modifier.weight(1f))
+                MetricCard(title = "Active Schedules", value = "$activeSchedules", color = EcoGreenPrimary, modifier = Modifier.weight(1f))
+                MetricCard(title = "Completed Schedules", value = "$completedSchedules", color = EcoGreenLight, modifier = Modifier.weight(1f))
+                MetricCard(title = "Missed Schedules", value = "$missedSchedules", color = HazardousRed, modifier = Modifier.weight(1f))
             }
         }
 
         item {
-            Button(
-                onClick = onRedeemCode,
-                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Key,
-                    contentDescription = "Key",
-                    tint = Color.Black,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Redeem Invitation Code", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            }
-        }
+            val today = LocalDate.now(ZoneId.systemDefault())
+            val dateFmt = DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault())
+            val isTodaySelected = selectedMapDate == today
+            val mapTitle = if (isTodaySelected) "TODAY'S COLLECTION ROUTES MAP" else "COLLECTION ROUTES MAP (${selectedMapDate.format(dateFmt).uppercase()})"
 
-        item {
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "AUTHORIZED DISTRICT COLLECTION CORRIDORS",
+                text = mapTitle,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = TextOnDarkMuted
             )
-        }
-
-        items(HakotRepository.routes) { route ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(240.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(route.routeName, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                    Text("📍 ${route.barangaysCovered}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                val activeSchedulesForDate = HakotRepository.schedules.filter { sch ->
+                    !sch.isDisabled && (sch.date == selectedMapDate || HakotRepository.isScheduleActiveOnDate(sch, selectedMapDate))
+                }
+                val routeSegmentsList = activeSchedulesForDate.mapNotNull { schedule ->
+                    if (schedule.orderedSegments.isNotEmpty()) {
+                        schedule.orderedSegments.mapNotNull { seg ->
+                            val coords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+                            val pts = coords.mapNotNull { (lng, lat) ->
+                                if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                            }
+                            if (pts.size >= 2) pts else null
+                        }.flatten()
+                    } else {
+                        val r = HakotRepository.routes.find { it.routeName.equals(schedule.routeName, ignoreCase = true) }
+                        r?.geoPoints?.mapNotNull { (lng, lat) ->
+                            if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                        } ?: emptyList()
+                    }
+                }
+                val routePoints = routeSegmentsList.flatten()
+
+                DarkMapView(
+                    modifier = Modifier.fillMaxSize(),
+                    customRoutePoints = routePoints,
+                    customRouteSegments = routeSegmentsList
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Select Scheduled Day to View Routes:",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextOnDarkSecondary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            val allNext7Days = (0..6).map { today.plusDays(it.toLong()) }
+            val daysWithSchedulesList = remember(HakotRepository.schedules.size) {
+                val filtered = allNext7Days.filter { d ->
+                    HakotRepository.schedules.any { sch ->
+                        !sch.isDisabled && (sch.date == d || HakotRepository.isScheduleActiveOnDate(sch, d))
+                    }
+                }
+                filtered.ifEmpty { listOf(today) }
+            }
+
+            LaunchedEffect(daysWithSchedulesList) {
+                if (daysWithSchedulesList.isNotEmpty() && !daysWithSchedulesList.contains(selectedMapDate)) {
+                    selectedMapDate = daysWithSchedulesList.first()
+                }
+            }
+
+            Box(modifier = Modifier.fillMaxWidth().height(38.dp)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(daysWithSchedulesList) { dateItem ->
+                        val isSelected = selectedMapDate == dateItem
+                        val label = if (dateItem == today) "Today" else dateItem.format(dateFmt)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { selectedMapDate = dateItem },
+                            label = { Text(label, fontSize = 10.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = EcoGreenContainer,
+                                selectedLabelColor = EcoGreenLight,
+                                containerColor = DarkSurfaceCard,
+                                labelColor = TextOnDarkSecondary
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -2531,12 +2616,20 @@ fun AdminAccountManagementView(
         scope.launch { HakotRepository.fetchPasswordResetRequests(context) }
     }
 
-    val totalAdmins = HakotRepository.adminProfiles.count {
-        it.role == UserRole.MUNICIPAL_ADMIN || it.role == UserRole.DISTRICT_ADMIN || it.role == UserRole.SYSTEM_OWNER
+    val currentAdmin = HakotRepository.currentDistrictAdmin
+    val municipalProfiles = HakotRepository.adminProfiles.filter { prof ->
+        prof.role != UserRole.SYSTEM_OWNER && (
+            HakotRepository.currentAdminRole == UserRole.SYSTEM_OWNER ||
+            (prof.municipalityOrgId.isNotBlank() && prof.municipalityOrgId == currentAdmin.municipalityOrgId) ||
+            (prof.municipalityName.isNotBlank() && prof.municipalityName.equals(currentAdmin.municipalityName, ignoreCase = true)) ||
+            currentAdmin.municipalityOrgId.isBlank()
+        )
     }
-    val activeCount = HakotRepository.adminProfiles.count { it.status == AdminStatus.ACTIVE }
+
+    val totalAdmins = municipalProfiles.size
+    val activeCount = municipalProfiles.count { it.status == AdminStatus.ACTIVE }
     val pendingCount = HakotRepository.accountInvitations.count { it.status == AdminStatus.PENDING_INVITATION }
-    val suspendedCount = HakotRepository.adminProfiles.count { it.status == AdminStatus.SUSPENDED }
+    val suspendedCount = municipalProfiles.count { it.status == AdminStatus.SUSPENDED }
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -2613,38 +2706,6 @@ fun AdminAccountManagementView(
                 }
             }
 
-            if (HakotRepository.currentAdminRole != UserRole.SYSTEM_OWNER) {
-                item {
-                    Card(
-                        onClick = onOpenCreateModal,
-                        colors = CardDefaults.cardColors(containerColor = EcoGreenContainer),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, EcoGreenPrimary, RoundedCornerShape(14.dp))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PersonAdd,
-                                contentDescription = "Invite Account",
-                                tint = EcoGreenPrimary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = "+ INVITE MUNICIPAL ACCOUNT VIA EMAIL",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = EcoGreenLight
-                            )
-                        }
-                    }
-                }
-            }
-
             item {
                 OutlinedTextField(
                     value = searchQuery,
@@ -2662,8 +2723,7 @@ fun AdminAccountManagementView(
                 )
             }
 
-            val filteredProfiles = HakotRepository.adminProfiles.filter { prof ->
-                val notSystemOwner = prof.role != UserRole.SYSTEM_OWNER
+            val filteredProfiles = municipalProfiles.filter { prof ->
                 val matchesSearch = searchQuery.isBlank() ||
                         prof.fullName.contains(searchQuery, ignoreCase = true) ||
                         prof.email.contains(searchQuery, ignoreCase = true) ||
@@ -2673,7 +2733,7 @@ fun AdminAccountManagementView(
                 val matchesRole = selectedRoleFilter == null || prof.role == selectedRoleFilter
                 val matchesStatus = selectedStatusFilter == null || prof.status == selectedStatusFilter
 
-                notSystemOwner && matchesSearch && matchesRole && matchesStatus
+                matchesSearch && matchesRole && matchesStatus
             }
 
             if (filteredProfiles.isEmpty()) {
@@ -3249,29 +3309,35 @@ fun AccountDetailsModal(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                Button(
-                    onClick = {
-                        onDeleteRequest()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(46.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("DELETE ACCOUNT", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                }
+                if (HakotRepository.currentAdminRole == UserRole.SYSTEM_OWNER) {
+                    Button(
+                        onClick = { onDeleteRequest() },
+                        colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("DELETE ACCOUNT", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                    ) {
+                        Text("Close Details", fontSize = 13.sp, color = TextOnDarkPrimary, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -3364,9 +3430,12 @@ fun AdminRoutesView() {
 fun MapRoutePlannerScreen(
     initialDate: LocalDate = LocalDate.now(),
     onDismiss: () -> Unit,
-    onSaveScheduledRoute: (String, String, String, LocalDate, LocalTime, LocalTime, String, Boolean, LocalDate?, List<GisRoadSegmentFeature>) -> Unit
+    onNavigateToDumpsites: () -> Unit = {},
+    onSaveScheduledRoute: (String, String, String, LocalDate, LocalTime, LocalTime, String, Boolean, LocalDate?, List<GisRoadSegmentFeature>, String) -> Unit
 ) {
+    val context = LocalContext.current
     var isGisLoading by remember { mutableStateOf(!GisManager.isLoaded) }
+    var selectedDumpsiteName by remember { mutableStateOf(HakotRepository.dumpsites.firstOrNull()?.name ?: "Nasugbu MRF Facility") }
 
     LaunchedEffect(Unit) {
         if (!GisManager.isLoaded) {
@@ -3456,7 +3525,11 @@ fun MapRoutePlannerScreen(
         // Top Toolbar
         Surface(
             color = DarkSurface,
-            modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
+            modifier = Modifier
+                .fillMaxWidth()
+                .zIndex(10f)
+                .align(Alignment.TopCenter)
+                .pointerInput(Unit) {},
             border = BorderStroke(1.dp, DarkBorder)
         ) {
             Row(
@@ -3473,11 +3546,14 @@ fun MapRoutePlannerScreen(
                 }
                 Button(
                     onClick = {
-                        if (selectedGisSegments.isNotEmpty()) {
-                            showReviewDialog = true
+                        if (selectedGisSegments.isEmpty()) {
+                            val fallbackRoads = availableRoads.ifEmpty { GisManager.roadSegments }
+                            if (fallbackRoads.isNotEmpty()) {
+                                selectedRoadSegmentIds = fallbackRoads.map { it.id }
+                            }
                         }
+                        showReviewDialog = true
                     },
-                    enabled = selectedGisSegments.isNotEmpty(),
                     colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
@@ -3493,7 +3569,9 @@ fun MapRoutePlannerScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.60f)
-                .align(Alignment.BottomCenter),
+                .zIndex(10f)
+                .align(Alignment.BottomCenter)
+                .pointerInput(Unit) {},
             shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
             border = BorderStroke(1.dp, DarkBorder)
         ) {
@@ -3697,6 +3775,56 @@ fun MapRoutePlannerScreen(
                     Text("Barangay: $selectedBarangay (${selectedGisSegments.size} segments)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
 
                     Spacer(modifier = Modifier.height(2.dp))
+                    Text("Assigned Dumpsite / MRF Facility:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    if (HakotRepository.dumpsites.isEmpty()) {
+                        Button(
+                            onClick = {
+                                showReviewDialog = false
+                                onDismiss()
+                                onNavigateToDumpsites()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().height(36.dp)
+                        ) {
+                            Text("+ Add Dumpsite First (Go to Dumpsites Tab)", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        var dumpsiteDropdownExpanded by remember { mutableStateOf(false) }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                                .background(DarkSurface)
+                                .clickable { dumpsiteDropdownExpanded = true }
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("🏛️ $selectedDumpsiteName", fontSize = 12.sp, color = TextOnDarkPrimary, fontWeight = FontWeight.Bold)
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = "Dropdown", tint = TextOnDarkSecondary)
+                            }
+                            DropdownMenu(
+                                expanded = dumpsiteDropdownExpanded,
+                                onDismissRequest = { dumpsiteDropdownExpanded = false }
+                            ) {
+                                HakotRepository.dumpsites.forEach { ds ->
+                                    DropdownMenuItem(
+                                        text = { Text(ds.name, fontSize = 12.sp) },
+                                        onClick = {
+                                            selectedDumpsiteName = ds.name
+                                            dumpsiteDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text("Schedule Frequency:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = scheduleType == "SPECIFIC_DATE", onClick = { scheduleType = "SPECIFIC_DATE" })
@@ -3834,7 +3962,8 @@ fun MapRoutePlannerScreen(
                                     "No assigned truck yet",
                                     repeatWeekly,
                                     endRecur,
-                                    selectedGisSegments
+                                    selectedGisSegments,
+                                    selectedDumpsiteName
                                 )
                                 showReviewDialog = false
                                 onDismiss()
@@ -3862,7 +3991,9 @@ fun MapRoutePlannerScreen(
 
 
 @Composable
-fun CollectionScheduleDashboardView() {
+fun CollectionScheduleDashboardView(
+    onNavigateToDumpsites: () -> Unit = {}
+) {
     val context = LocalContext.current
     val zoneId = ZoneId.of("Asia/Manila")
     var showSchedulePlanner by remember { mutableStateOf(false) }
@@ -3938,7 +4069,11 @@ fun CollectionScheduleDashboardView() {
             MapRoutePlannerScreen(
                 initialDate = adminSelectedDay ?: LocalDate.now(),
                 onDismiss = { showSchedulePlanner = false },
-                onSaveScheduledRoute = { routeName, scheduleName, barangayName, date, startTime, endTime, truck, repeatWeekly, repeatEnd, segments ->
+                onNavigateToDumpsites = {
+                    showSchedulePlanner = false
+                    onNavigateToDumpsites()
+                },
+                onSaveScheduledRoute = { routeName, scheduleName, barangayName, date, startTime, endTime, truck, repeatWeekly, repeatEnd, segments, dumpsiteName ->
                     val newSchedule = ScheduleItem(
                         id = "sch_${System.currentTimeMillis()}",
                         barangay = barangayName,
@@ -3952,7 +4087,8 @@ fun CollectionScheduleDashboardView() {
                         isWeeklyRepeat = repeatWeekly,
                         recurrenceEndDate = repeatEnd,
                         isDisabled = false,
-                        orderedSegments = segments
+                        orderedSegments = segments,
+                        dumpsiteName = dumpsiteName
                     )
 
                     scope.launch {
@@ -4170,6 +4306,7 @@ fun CollectionScheduleDashboardView() {
                             Text("📍 Barangay Scope: ${sch.barangay}", fontSize = 12.sp, color = if (sch.isDisabled) TextOnDarkSecondary else EcoGreenLight)
                             Text("🗓️ Date: ${sch.date} • Time: ${sch.startTime} - ${sch.endTime}", fontSize = 11.sp, color = TextOnDarkSecondary)
                             Text("🚛 Assigned Truck: ${sch.truckAssigned}", fontSize = 11.sp, color = TextOnDarkSecondary)
+                            Text("🏛️ Dumpsite: ${sch.dumpsiteName}", fontSize = 11.sp, color = EcoGreenLight)
                             if (sch.isWeeklyRepeat) {
                                 Text("🔄 Repeats Weekly until ${sch.recurrenceEndDate}", fontSize = 10.sp, color = if (sch.isDisabled) TextOnDarkSecondary else EcoGreenLight)
                             }
@@ -4341,6 +4478,7 @@ fun CollectionScheduleDashboardView() {
                         Text("Time Window: ${sch.startTime} - ${sch.endTime}", fontSize = 12.sp, color = TextOnDarkPrimary)
                         val truckDisplay = if (sch.truckAssigned.isBlank() || sch.truckAssigned.contains("Unassigned", ignoreCase = true) || sch.truckAssigned.contains("No assigned", ignoreCase = true) || sch.truckAssigned.contains("Dump Truck", ignoreCase = true)) "No assigned truck yet" else sch.truckAssigned
                         Text("Assigned Truck: $truckDisplay", fontSize = 12.sp, color = TextOnDarkPrimary)
+                        Text("Assigned Dumpsite: ${sch.dumpsiteName}", fontSize = 12.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
                         Text("Status: ${sch.status}", fontSize = 12.sp, color = TextOnDarkPrimary)
                         if (sch.isWeeklyRepeat) {
                             Text("🔄 Weekly Recurrence: Active until ${sch.recurrenceEndDate}", fontSize = 11.sp, color = EcoGreenLight)
@@ -4592,6 +4730,8 @@ fun AdminTrucksView() {
     var assignedRouteInput by remember { mutableStateOf("Nasugbu Main Route") }
     var destinationInput by remember { mutableStateOf("Nasugbu MRF Facility") }
 
+    var selectedTruckForDelete by remember { mutableStateOf<Dumptrack?>(null) }
+
     LaunchedEffect(Unit) {
         HakotRepository.fetchTrucksFromSupabase(context)
     }
@@ -4678,8 +4818,18 @@ fun AdminTrucksView() {
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text("👤 Driver: ${tr.driverName}", fontSize = 12.sp, color = EcoGreenLight)
-                            Text("📍 Assigned Route: ${tr.assignedRoute}", fontSize = 11.sp, color = TextOnDarkSecondary)
-                            Text("🏁 Destination: ${tr.destinationDumpsite}", fontSize = 11.sp, color = TextOnDarkSecondary)
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = { selectedTruckForDelete = tr }
+                                ) {
+                                    Text("Delete Truck ✕", fontSize = 10.sp, color = HazardousRed, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }
@@ -4687,12 +4837,63 @@ fun AdminTrucksView() {
         }
     }
 
+    if (selectedTruckForDelete != null) {
+        val trToDelete = selectedTruckForDelete!!
+        AlertDialog(
+            onDismissRequest = { selectedTruckForDelete = null },
+            containerColor = DarkSurfaceCard,
+            title = {
+                Text(
+                    text = "Confirm Truck Deletion",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = HazardousRed
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to delete fleet truck '${trToDelete.truckCode}' (${trToDelete.plateNumber})?\n\nThis action cannot be undone.",
+                    fontSize = 12.sp,
+                    color = TextOnDarkSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val success = HakotRepository.deleteTruckFromSupabase(trToDelete.id, context)
+                            if (success) {
+                                HakotRepository.trucks.removeIf { it.id == trToDelete.id }
+                                Toast.makeText(context, "Truck deleted successfully.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Error deleting truck", Toast.LENGTH_SHORT).show()
+                            }
+                            selectedTruckForDelete = null
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Yes, Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedTruckForDelete = null }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            }
+        )
+    }
+
     if (showAddTruckDialog) {
         AlertDialog(
             onDismissRequest = { showAddTruckDialog = false },
             title = { Text("Register New Fleet Truck", color = TextOnDarkPrimary, fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     OutlinedTextField(
                         value = truckCodeInput,
                         onValueChange = { truckCodeInput = it },
@@ -4740,7 +4941,7 @@ fun AdminTrucksView() {
                         if (plateNumberInput.isNotBlank() && driverNameInput.isNotBlank()) {
                             scope.launch {
                                 val newTruck = Dumptrack(
-                                    id = "tr_${System.currentTimeMillis()}",
+                                    id = UUID.randomUUID().toString(),
                                     truckCode = truckCodeInput.trim().ifBlank { "Hakot Truck" },
                                     plateNumber = plateNumberInput.trim(),
                                     driverName = driverNameInput.trim(),
@@ -4752,9 +4953,11 @@ fun AdminTrucksView() {
                                 val res = HakotRepository.saveTruckToSupabase(newTruck, context)
                                 if (res.first) {
                                     successMsg = "Successfully registered truck '${newTruck.truckCode}' to Supabase!"
+                                    Toast.makeText(context, "Truck saved successfully to database!", Toast.LENGTH_SHORT).show()
                                     showAddTruckDialog = false
                                 } else {
                                     successMsg = "Error saving truck: ${res.second}"
+                                    Toast.makeText(context, "Error: ${res.second}", Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
@@ -4778,70 +4981,146 @@ fun AdminTrucksView() {
 
 @Composable
 fun AdminReportsView() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var selectedReportForChat by remember { mutableStateOf<AnonymousReport?>(null) }
+    val assignedMunicipality = HakotRepository.activeOrganization.assignedMunicipality
 
     LaunchedEffect(Unit) {
         HakotRepository.fetchAnonymousReportsFromSupabase()
+    }
+
+    val municipalityReports = HakotRepository.reports.filter { rep ->
+        assignedMunicipality.isBlank() ||
+        rep.locationName.contains(assignedMunicipality, ignoreCase = true) ||
+        rep.description.contains(assignedMunicipality, ignoreCase = true)
     }
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 20.dp)
     ) {
-        items(HakotRepository.reports) { rep ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { selectedReportForChat = rep }
-                    .border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+        item {
+            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                Text("Citizen Waste Reports", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                Text("Review and resolve waste collection reports submitted by citizens", fontSize = 11.sp, color = TextOnDarkSecondary)
+            }
+        }
+
+        if (municipalityReports.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             Text(
-                                text = rep.referenceNumber,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = EcoGreenLight
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = rep.reportType.title,
+                                text = "Reports list is empty.",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = HazardousRed
+                                color = TextOnDarkPrimary
+                            )
+                            Text(
+                                text = "No citizen waste reports found for your municipality.",
+                                fontSize = 11.sp,
+                                color = TextOnDarkSecondary,
+                                textAlign = TextAlign.Center
                             )
                         }
-
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(EcoGreenContainer)
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                    }
+                }
+            }
+        } else {
+            items(municipalityReports) { rep ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedReportForChat = rep }
+                        .border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(rep.status.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = rep.referenceNumber,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EcoGreenLight
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = rep.reportType.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = HazardousRed
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(EcoGreenContainer)
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(rep.status.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = "📍 ${rep.locationName}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextOnDarkPrimary
+                        )
+                        Text(
+                            text = rep.description,
+                            fontSize = 11.sp,
+                            color = TextOnDarkSecondary
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val success = HakotRepository.resolveCitizenReport(rep.id, context)
+                                        if (success) {
+                                            Toast.makeText(context, "Report resolved & deleted successfully.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Error resolving report", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.height(30.dp)
+                            ) {
+                                Text("Resolve", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = "📍 ${rep.locationName}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextOnDarkPrimary
-                    )
-                    Text(
-                        text = rep.description,
-                        fontSize = 11.sp,
-                        color = TextOnDarkSecondary
-                    )
                 }
             }
         }
@@ -4852,26 +5131,96 @@ fun AdminReportsView() {
 
 @Composable
 fun AdminAuditLogsView() {
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 20.dp)
+    var auditSubTab by remember { mutableIntStateOf(0) } // 0 = Admins Audit History, 1 = Truckers Activity
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        items(HakotRepository.auditLogs) { log ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text("Audit History", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+            Text("🕒 Audit logs automatically expire and delete after 15 days", fontSize = 10.sp, color = RecycleYellow)
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = auditSubTab == 0,
+                onClick = { auditSubTab = 0 },
+                label = { Text("Admins Audit History", fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight, containerColor = DarkSurfaceCard, labelColor = TextOnDarkSecondary)
+            )
+            FilterChip(
+                selected = auditSubTab == 1,
+                onClick = { auditSubTab = 1 },
+                label = { Text("Truckers Activity", fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = EcoGreenContainer, selectedLabelColor = EcoGreenLight, containerColor = DarkSurfaceCard, labelColor = TextOnDarkSecondary)
+            )
+        }
+
+        val filteredLogs = HakotRepository.auditLogs.filter { log ->
+            val isTruckerActivity = log.action.contains("Trucker", ignoreCase = true) || log.action.contains("GPS", ignoreCase = true) || log.action.contains("Driver", ignoreCase = true)
+            if (auditSubTab == 1) isTruckerActivity else !isTruckerActivity
+        }
+
+        if (filteredLogs.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(log.actingUserEmail, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                        Text(log.targetRecord, fontSize = 11.sp, color = TextOnDarkMuted)
+                        Text(
+                            text = "Audit history list is empty.",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnDarkPrimary
+                        )
+                        Text(
+                            text = "No recorded actions found for this view.",
+                            fontSize = 11.sp,
+                            color = TextOnDarkSecondary,
+                            textAlign = TextAlign.Center
+                        )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(log.action, fontSize = 12.sp, color = TextOnDarkPrimary)
+                }
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 20.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(filteredLogs) { log ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(log.actingUserEmail, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                                Text(log.targetRecord, fontSize = 11.sp, color = TextOnDarkMuted)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(log.action, fontSize = 12.sp, color = TextOnDarkPrimary)
+                        }
+                    }
                 }
             }
         }
@@ -5715,34 +6064,60 @@ fun AdminDumpsitesView() {
     }
 
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Column {
-                Text("Municipal Dumpsites & MRF Facilities", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                Text("Manage municipal disposal sites and material recovery facilities", fontSize = 11.sp, color = TextOnDarkSecondary)
-            }
-            Button(
-                onClick = { showAddDumpsiteModal = true },
-                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Add Dumpsite", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Municipal Dumpsites & MRF Facilities", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    Text("Manage municipal disposal sites and material recovery facilities", fontSize = 11.sp, color = TextOnDarkSecondary)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = { showAddDumpsiteModal = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add", tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add Dumpsite", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         if (HakotRepository.dumpsites.isEmpty()) {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, EcoGreenPrimary.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
             ) {
-                Text("No dumpsites registered in the database.", fontSize = 11.sp, color = TextOnDarkSecondary, modifier = Modifier.padding(16.dp))
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("No dumpsites registered in the database.", fontSize = 12.sp, color = TextOnDarkSecondary)
+                    Button(
+                        onClick = { showAddDumpsiteModal = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Add", tint = Color.Black, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("+ ADD DUMPSITE / MRF FACILITY", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         } else {
             HakotRepository.dumpsites.forEach { ds ->
@@ -5800,6 +6175,9 @@ fun AdminDumpsitesView() {
         }
     }
 
+    var selectedDsLat by remember { mutableStateOf(14.0700) }
+    var selectedDsLon by remember { mutableStateOf(120.6300) }
+
     if (showAddDumpsiteModal) {
         AlertDialog(
             onDismissRequest = { showAddDumpsiteModal = false },
@@ -5823,16 +6201,55 @@ fun AdminDumpsitesView() {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "📍 Tap Map to Pinpoint Facility Coordinates:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = EcoGreenLight
+                    )
+                    Text(
+                        text = "Coordinates: ${String.format(Locale.US, "%.4f", selectedDsLat)}, ${String.format(Locale.US, "%.4f", selectedDsLon)}",
+                        fontSize = 10.sp,
+                        color = TextOnDarkSecondary
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .border(1.dp, EcoGreenPrimary, RoundedCornerShape(10.dp))
+                    ) {
+                        DarkMapView(
+                            modifier = Modifier.fillMaxSize(),
+                            customRoutePoints = listOf(GeoPoint(selectedDsLat, selectedDsLon)),
+                            onMapClick = { latLng ->
+                                selectedDsLat = latLng.latitude
+                                selectedDsLon = latLng.longitude
+                                latInput = latLng.latitude.toString()
+                                lonInput = latLng.longitude.toString()
+                            }
+                        )
+                    }
+
                     OutlinedTextField(
                         value = latInput,
-                        onValueChange = { latInput = it },
+                        onValueChange = {
+                            latInput = it
+                            it.toDoubleOrNull()?.let { v -> selectedDsLat = v }
+                        },
                         label = { Text("Latitude (lat)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = lonInput,
-                        onValueChange = { lonInput = it },
+                        onValueChange = {
+                            lonInput = it
+                            it.toDoubleOrNull()?.let { v -> selectedDsLon = v }
+                        },
                         label = { Text("Longitude (lon)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -5883,10 +6300,10 @@ fun AdminDumpsitesView() {
                     onClick = {
                         if (nameInput.isNotBlank()) {
                             scope.launch {
-                                val latVal = latInput.toDoubleOrNull() ?: 14.0700
-                                val lonVal = lonInput.toDoubleOrNull() ?: 120.6300
+                                val latVal = latInput.toDoubleOrNull() ?: selectedDsLat
+                                val lonVal = lonInput.toDoubleOrNull() ?: selectedDsLon
                                 val newDs = Dumpsite(
-                                    id = "ds_${System.currentTimeMillis()}",
+                                    id = UUID.randomUUID().toString(),
                                     name = nameInput.trim(),
                                     latitude = latVal,
                                     longitude = lonVal,
