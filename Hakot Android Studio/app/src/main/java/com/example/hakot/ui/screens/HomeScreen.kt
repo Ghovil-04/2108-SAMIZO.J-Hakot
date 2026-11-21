@@ -1,5 +1,12 @@
 package com.example.hakot.ui.screens
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import android.util.Log
 import com.example.hakot.R
 import androidx.compose.animation.AnimatedVisibility
@@ -33,6 +40,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
@@ -89,6 +98,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.osmdroid.util.GeoPoint
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import com.example.hakot.data.GisManager
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.data.HakotRepository.MunicipalityItem
 import com.example.hakot.model.ReportType
@@ -116,8 +129,6 @@ import com.example.hakot.ui.theme.ResidualCyanContainer
 import com.example.hakot.ui.theme.TextOnDarkMuted
 import com.example.hakot.ui.theme.TextOnDarkPrimary
 import com.example.hakot.ui.theme.TextOnDarkSecondary
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,14 +140,48 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var userLat by remember { mutableStateOf(14.0700) }
+    var userLon by remember { mutableStateOf(120.6300) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            try {
+                val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                val loc = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                    ?: lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                if (loc != null) {
+                    userLat = loc.latitude
+                    userLon = loc.longitude
+                }
+            } catch (_: SecurityException) {}
+        }
+    }
+
     LaunchedEffect(Unit) {
         try {
+            HakotRepository.selectedFocusSchedule = null
+            HakotRepository.selectedMapDate = LocalDate.now()
             Log.d("HAKOT_HOME", "Home screen opened - Fetching all launch data from Supabase...")
             HakotRepository.restoreSession(context)
             HakotRepository.fetchSchedulesFromSupabase(context)
             HakotRepository.fetchTrucksFromSupabase(context)
+            HakotRepository.fetchTruckerAccountsFromSupabase(context)
             HakotRepository.fetchDumpsitesFromSupabase(context)
             HakotRepository.fetchAnonymousReportsFromSupabase()
+
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                val loc = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                    ?: lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                if (loc != null) {
+                    userLat = loc.latitude
+                    userLon = loc.longitude
+                }
+            } else {
+                locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
             Log.d("HAKOT_HOME", "Fetch all launch data on home succeeded. Schedules count=${HakotRepository.schedules.size}")
         } catch (e: Exception) {
             Log.e("HAKOT_HOME", "Error fetching launch data on home screen", e)
@@ -147,6 +192,144 @@ fun HomeScreen(
     var selectedReportType by remember { mutableStateOf(ReportType.MISSED_COLLECTION) }
     var isMapInteracting by remember { mutableStateOf(false) }
 
+    val todayDate = LocalDate.now()
+    val todaySchedules = remember(HakotRepository.schedules.size, todayDate) {
+        HakotRepository.schedules.filter { sch ->
+            !sch.isDisabled && (sch.date == todayDate || HakotRepository.isScheduleActiveOnDate(sch, todayDate))
+        }
+    }
+    val activeRouteSegments = remember(todaySchedules) {
+        val list = mutableListOf<List<GeoPoint>>()
+        todaySchedules.filter { it.status != "COMPLETED" }.forEach { sch ->
+            val segsList = mutableListOf<List<GeoPoint>>()
+            if (sch.orderedSegments.isNotEmpty()) {
+                sch.orderedSegments.forEach { seg ->
+                    val baseSeg = GisManager.roadSegments.find { it.id == seg.id } ?: seg
+                    val rawCoords = when {
+                        seg.clippedCoordinates.isNotEmpty() -> seg.clippedCoordinates
+                        seg.lineStringCoordinates.isNotEmpty() -> seg.lineStringCoordinates
+                        baseSeg.clippedCoordinates.isNotEmpty() -> baseSeg.clippedCoordinates
+                        baseSeg.lineStringCoordinates.isNotEmpty() -> baseSeg.lineStringCoordinates
+                        else -> emptyList()
+                    }
+                    val coords = if (seg.isReversed) rawCoords.reversed() else rawCoords
+                    val points = coords.mapNotNull { (lng, lat) ->
+                        if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                    }
+                    if (points.size >= 2) segsList.add(points)
+                }
+            }
+            if (segsList.isEmpty()) {
+                val r = HakotRepository.routes.find { it.routeName.equals(sch.routeName, ignoreCase = true) }
+                val rPts = r?.geoPoints?.mapNotNull { (lng, lat) ->
+                    if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                } ?: emptyList()
+                if (rPts.size >= 2) {
+                    segsList.add(rPts)
+                } else {
+                    val bgyRoads = GisManager.getRoadSegmentsInBarangay(sch.barangay)
+                    bgyRoads.forEach { seg ->
+                        val rawCoords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+                        val points = rawCoords.mapNotNull { (lng, lat) ->
+                            if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                        }
+                        if (points.size >= 2) segsList.add(points)
+                    }
+                }
+            }
+            list.addAll(segsList)
+        }
+        list
+    }
+
+    val completedRouteSegments = remember(todaySchedules) {
+        val list = mutableListOf<List<GeoPoint>>()
+        todaySchedules.filter { it.status == "COMPLETED" }.forEach { sch ->
+            val segsList = mutableListOf<List<GeoPoint>>()
+            if (sch.orderedSegments.isNotEmpty()) {
+                sch.orderedSegments.forEach { seg ->
+                    val baseSeg = GisManager.roadSegments.find { it.id == seg.id } ?: seg
+                    val rawCoords = when {
+                        seg.clippedCoordinates.isNotEmpty() -> seg.clippedCoordinates
+                        seg.lineStringCoordinates.isNotEmpty() -> seg.lineStringCoordinates
+                        baseSeg.clippedCoordinates.isNotEmpty() -> baseSeg.clippedCoordinates
+                        baseSeg.lineStringCoordinates.isNotEmpty() -> baseSeg.lineStringCoordinates
+                        else -> emptyList()
+                    }
+                    val coords = if (seg.isReversed) rawCoords.reversed() else rawCoords
+                    val points = coords.mapNotNull { (lng, lat) ->
+                        if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                    }
+                    if (points.size >= 2) segsList.add(points)
+                }
+            }
+            if (segsList.isEmpty()) {
+                val r = HakotRepository.routes.find { it.routeName.equals(sch.routeName, ignoreCase = true) }
+                val rPts = r?.geoPoints?.mapNotNull { (lng, lat) ->
+                    if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                } ?: emptyList()
+                if (rPts.size >= 2) {
+                    segsList.add(rPts)
+                } else {
+                    val bgyRoads = GisManager.getRoadSegmentsInBarangay(sch.barangay)
+                    bgyRoads.forEach { seg ->
+                        val rawCoords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+                        val points = rawCoords.mapNotNull { (lng, lat) ->
+                            if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                        }
+                        if (points.size >= 2) segsList.add(points)
+                    }
+                }
+            }
+            list.addAll(segsList)
+        }
+        list
+    }
+
+    val activeTruckerLocations = remember(HakotRepository.truckerAccounts.size, HakotRepository.activeOrganization.municipalityId) {
+        HakotRepository.truckerAccounts.filter { trucker ->
+            trucker.municipalityId == HakotRepository.activeOrganization.municipalityId &&
+            trucker.isSharingLocation &&
+            trucker.latitude != 0.0 && trucker.longitude != 0.0 &&
+            trucker.latitude.isFinite() && trucker.longitude.isFinite() &&
+            trucker.latitude in -90.0..90.0 && trucker.longitude in -180.0..180.0
+        }.map { GeoPoint(it.latitude, it.longitude) }
+    }
+
+    var focusedTruckerPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var truckerFocusTrigger by remember { mutableStateOf(0) }
+    var focusedSearchPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var searchFocusTrigger by remember { mutableStateOf(0) }
+
+    fun focusTruckerGps(sch: ScheduleItem?) {
+        if (sch != null) {
+            val assignedDriverName = sch.truckAssigned.substringAfter("Driver:").trim()
+            val matchedTrucker = HakotRepository.truckerAccounts.find { trucker ->
+                (assignedDriverName.isNotBlank() && trucker.fullName.contains(assignedDriverName, ignoreCase = true)) ||
+                sch.truckAssigned.contains(trucker.fullName, ignoreCase = true) ||
+                (trucker.username.isNotBlank() && sch.truckAssigned.contains(trucker.username, ignoreCase = true))
+            }
+            val matchedTruck = HakotRepository.trucks.find { truck ->
+                sch.truckAssigned.contains(truck.plateNumber, ignoreCase = true) ||
+                (truck.driverName.isNotBlank() && sch.truckAssigned.contains(truck.driverName, ignoreCase = true))
+            }
+            val isSharing = matchedTrucker?.isSharingLocation == true || matchedTruck?.isOnline == true
+            val lat = matchedTrucker?.latitude.takeIf { it != null && it != 0.0 }
+                ?: matchedTruck?.latitude.takeIf { it != null && it != 0.0 } ?: 0.0
+            val lon = matchedTrucker?.longitude.takeIf { it != null && it != 0.0 }
+                ?: matchedTruck?.longitude.takeIf { it != null && it != 0.0 } ?: 0.0
+
+            if (isSharing && lat != 0.0 && lon != 0.0) {
+                focusedTruckerPoint = GeoPoint(lat, lon)
+                truckerFocusTrigger++
+            } else {
+                Toast.makeText(context, "Trucker GPS is offline", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Trucker GPS is offline", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Full-Width Top Header Box covering the entire top
@@ -154,7 +337,12 @@ fun HomeScreen(
                 query = searchQuery,
                 onQueryChange = onQueryChange,
                 onMenuClick = onMenuClick,
-                isAdminMode = isAdminMode
+                isAdminMode = isAdminMode,
+                onSelectSuggestion = { _, lat, lon ->
+                    focusedSearchPoint = GeoPoint(lat, lon)
+                    searchFocusTrigger++
+                    onQueryChange("")
+                }
             )
 
             // Map Container in standing rectangle format with reduced height and consistent 14.dp rounded corners
@@ -168,6 +356,16 @@ fun HomeScreen(
             ) {
                 DarkMapView(
                     searchQuery = searchQuery,
+                    customRoutePoints = activeRouteSegments.flatten(),
+                    customRouteSegments = activeRouteSegments,
+                    completedRouteSegments = completedRouteSegments,
+                    autoCenterSinglePoint = true,
+                    userLocationPoint = GeoPoint(userLat, userLon),
+                    truckerLocations = activeTruckerLocations,
+                    truckerFocusPoint = focusedTruckerPoint,
+                    truckerFocusTrigger = truckerFocusTrigger,
+                    searchFocusPoint = focusedSearchPoint,
+                    searchFocusTrigger = searchFocusTrigger,
                     onReportClick = { showReportDialog = true },
                     onMapInteractionStateChange = { interacting ->
                         isMapInteracting = interacting
@@ -232,12 +430,8 @@ fun HomeScreen(
                             CollectionStatusCardItem(
                                 schedule = sch,
                                 modifier = Modifier.fillMaxWidth(),
-                                onClick = {
-                                    if (sch != null) {
-                                        HakotRepository.selectedMapDate = sch.date
-                                        HakotRepository.selectedFocusSchedule = sch
-                                    }
-                                }
+                                onClick = {},
+                                onTruckIslandClick = { focusTruckerGps(sch) }
                             )
                         }
                         else -> { // 2 or more schedules: swipable horizontal list (LazyRow)
@@ -250,10 +444,8 @@ fun HomeScreen(
                                     CollectionStatusCardItem(
                                         schedule = sch,
                                         modifier = Modifier.width(260.dp),
-                                        onClick = {
-                                            HakotRepository.selectedMapDate = sch.date
-                                            HakotRepository.selectedFocusSchedule = sch
-                                        }
+                                        onClick = {},
+                                        onTruckIslandClick = { focusTruckerGps(sch) }
                                     )
                                 }
                             }
@@ -415,18 +607,22 @@ fun AnonymousReportModal(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = "Report Waste Issue Anonymously",
-                    fontSize = 18.sp,
+                    text = "Report Waste Issue",
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TextOnDarkPrimary
+                    color = TextOnDarkPrimary,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(EcoGreenContainer)
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text("100% Anonymous", fontSize = 10.sp, color = EcoGreenLight)
+                    Text("100% Anonymous", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                 }
             }
 
@@ -499,16 +695,17 @@ fun AnonymousReportModal(
                         .fillMaxWidth(0.9f)
                         .background(DarkSurfaceCard)
                 ) {
-                    ReportType.entries.forEach { type ->
+                    ReportType.entries.forEachIndexed { index, type ->
                         DropdownMenuItem(
                             text = {
-                                Column {
+                                Column(modifier = Modifier.padding(vertical = 6.dp)) {
                                     Text(
                                         text = type.title,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (type == selectedType) HazardousRed else TextOnDarkPrimary
                                     )
+                                    Spacer(modifier = Modifier.height(2.dp))
                                     Text(
                                         text = type.description,
                                         fontSize = 10.sp,
@@ -529,6 +726,9 @@ fun AnonymousReportModal(
                                 isCategoryDropdownExpanded = false
                             }
                         )
+                        if (index < ReportType.entries.size - 1) {
+                            HorizontalDivider(color = DarkBorder.copy(alpha = 0.4f), thickness = 0.5.dp)
+                        }
                     }
                 }
             }
@@ -650,9 +850,19 @@ fun AnonymousReportModal(
 fun CollectionStatusCardItem(
     schedule: ScheduleItem?,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit = {}
+    onClick: () -> Unit = {},
+    onTruckIslandClick: (() -> Unit)? = null
 ) {
-    val truckName = schedule?.truckAssigned?.takeIf { it.isNotBlank() } ?: "No assigned truck yet"
+    val context = LocalContext.current
+    val rawTruckAssigned = schedule?.truckAssigned?.takeIf { it.isNotBlank() } ?: "No assigned truck yet"
+    val platePart = rawTruckAssigned.substringBefore("(").substringBefore(" - Driver:").trim()
+    val driverPart = rawTruckAssigned.substringAfter("Driver:").trim().takeIf { it.isNotBlank() }
+        ?: "No driver"
+    val truckName = if (rawTruckAssigned.contains("Driver:")) {
+        "$platePart - $driverPart"
+    } else {
+        rawTruckAssigned
+    }
     val assignedArea = schedule?.barangay?.takeIf { it.isNotBlank() } ?: "Wawa → Bucana"
     val scheduleTime = if (schedule != null) "${schedule.startTime} – ${schedule.endTime}" else "08:00 – 11:30 AM"
     val cardStatus = if (schedule != null) HakotRepository.getDisplayStatus(schedule.status) else "UPCOMING"
@@ -664,7 +874,11 @@ fun CollectionStatusCardItem(
         modifier = modifier.clickable {
             if (schedule != null) {
                 HakotRepository.selectedMapDate = schedule.date
-                HakotRepository.selectedFocusSchedule = schedule
+                if (HakotRepository.selectedFocusSchedule?.id == schedule.id) {
+                    HakotRepository.selectedFocusSchedule = null
+                } else {
+                    HakotRepository.selectedFocusSchedule = schedule
+                }
             }
             onClick()
         }
@@ -695,11 +909,38 @@ fun CollectionStatusCardItem(
                 color = DarkSurfaceVariant,
                 shape = RoundedCornerShape(8.dp),
                 border = BorderStroke(1.dp, DarkBorder),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        if (onTruckIslandClick != null) {
+                            onTruckIslandClick()
+                        } else {
+                            val assignedDriverName = schedule?.truckAssigned?.substringAfter("Driver:")?.trim() ?: ""
+                            val matchedTrucker = HakotRepository.truckerAccounts.find { trucker ->
+                                (assignedDriverName.isNotBlank() && trucker.fullName.contains(assignedDriverName, ignoreCase = true)) ||
+                                (schedule?.truckAssigned?.contains(trucker.fullName, ignoreCase = true) == true) ||
+                                (trucker.username.isNotBlank() && schedule?.truckAssigned?.contains(trucker.username, ignoreCase = true) == true)
+                            }
+                            val matchedTruck = HakotRepository.trucks.find { truck ->
+                                schedule?.truckAssigned?.contains(truck.plateNumber, ignoreCase = true) == true ||
+                                (truck.driverName.isNotBlank() && schedule?.truckAssigned?.contains(truck.driverName, ignoreCase = true) == true)
+                            }
+                            val lat = matchedTrucker?.latitude.takeIf { it != null && it != 0.0 }
+                                ?: matchedTruck?.latitude.takeIf { it != null && it != 0.0 } ?: 0.0
+                            val lon = matchedTrucker?.longitude.takeIf { it != null && it != 0.0 }
+                                ?: matchedTruck?.longitude.takeIf { it != null && it != 0.0 } ?: 0.0
+
+                            if (lat == 0.0 || lon == 0.0) {
+                                Toast.makeText(context, "Trucker GPS is offline", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
             ) {
+                val scrollState = rememberScrollState()
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(scrollState)
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -714,7 +955,9 @@ fun CollectionStatusCardItem(
                         text = truckName,
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TextOnDarkPrimary
+                        color = TextOnDarkPrimary,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }

@@ -67,6 +67,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun HakotMainApp() {
     val context = LocalContext.current
+    remember(context) {
+        HakotRepository.initSavedMunicipality(context)
+        true
+    }
     var selectedTab by rememberSaveable { mutableStateOf(HakotTab.MAP) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var isAdminMode by rememberSaveable { mutableStateOf<Boolean>(HakotRepository.isAuthenticated) }

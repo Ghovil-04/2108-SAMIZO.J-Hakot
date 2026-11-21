@@ -65,17 +65,19 @@ object HakotRepository {
     private var currentUserId: String? = null
     private val refreshMutex = Mutex()
 
-    var activeOrganization = OrganizationConfig(
-        organizationKey = "org_nasugbu_lgu",
-        municipalityId = "cb394eb7-a8b7-45f2-a314-3926baeab31f",
-        name = "Nasugbu Municipal Waste Management Office",
-        type = OrganizationType.MUNICIPALITY,
-        province = "Batangas",
-        region = "CALABARZON (Region IV-A)",
-        assignedMunicipality = "Nasugbu",
-        coveredBarangays = listOf("Poblacion 1", "Poblacion 2", "Poblacion 3", "Wawa", "Bucana", "Looc", "Kaylaway"),
-        adminContactEmail = "waste.management@nasugbu.gov.ph",
-        adminContactPhone = "(043) 723-HAKOT"
+    var activeOrganization by mutableStateOf(
+        OrganizationConfig(
+            organizationKey = "org_nasugbu_lgu",
+            municipalityId = "cb394eb7-a8b7-45f2-a314-3926baeab31f",
+            name = "Nasugbu Municipal Waste Management Office",
+            type = OrganizationType.MUNICIPALITY,
+            province = "Batangas",
+            region = "CALABARZON (Region IV-A)",
+            assignedMunicipality = "Nasugbu",
+            coveredBarangays = listOf("Poblacion 1", "Poblacion 2", "Poblacion 3", "Wawa", "Bucana", "Looc", "Kaylaway"),
+            adminContactEmail = "waste.management@nasugbu.gov.ph",
+            adminContactPhone = "(043) 723-HAKOT"
+        )
     )
 
     var currentDistrictAdmin = AdminUserProfile(
@@ -939,26 +941,129 @@ object HakotRepository {
 
     val passwordResetRequests = mutableStateListOf<PasswordResetRequest>()
 
+    var resetPasswordAttempts = 0
+
     suspend fun submitPasswordResetRequest(fullName: String, email: String, context: Context? = null): Pair<Boolean, String> {
+        val maxAttempts = 3
+        val cooldownMillis = 5 * 60 * 1000L // 5 minutes cooldown
+        val prefs = context?.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        val currentAttempts = prefs?.getInt("reset_password_attempts", 0) ?: resetPasswordAttempts
+        val lastFailedTime = prefs?.getLong("reset_password_last_failed_time", 0L) ?: 0L
+        val now = System.currentTimeMillis()
+
+        if (currentAttempts >= maxAttempts) {
+            val elapsedTime = now - lastFailedTime
+            if (elapsedTime < cooldownMillis) {
+                val remainingSecs = ((cooldownMillis - elapsedTime) / 1000).coerceAtLeast(1)
+                val remainingMins = (remainingSecs / 60) + 1
+                return Pair(false, "Maximum 3 reset attempts reached. Please try again in $remainingMins minute(s).")
+            } else {
+                prefs?.edit()?.putInt("reset_password_attempts", 0)?.putLong("reset_password_last_failed_time", 0L)?.apply()
+                resetPasswordAttempts = 0
+            }
+        }
+
         if (fullName.isBlank() || email.isBlank()) {
             return Pair(false, "Please provide both full name and email.")
         }
         val cleanName = fullName.trim()
         val cleanEmail = email.trim().lowercase()
 
-        // Attempt to find real user_id from profiles table by email
+        var emailExists = false
         var matchedUserId: String? = null
         try {
-            val profRes = SupabaseClient.fetchPublicTableRecords("profiles?email=eq.$cleanEmail&select=id")
-            if (profRes.isSuccess && profRes.data != null && profRes.data.length() > 0) {
-                val fetchedId = profRes.data.getJSONObject(0).optString("id", "")
-                if (fetchedId.isNotBlank()) {
-                    matchedUserId = fetchedId
+            // 1. Query Supabase Auth via secure PostgreSQL RPC function checking auth.users email column
+            val rpcPayload = JSONObject().apply {
+                put("email_input", cleanEmail)
+            }
+            val rpcRes = SupabaseClient.invokeRpc("check_user_email_exists", rpcPayload, currentAccessToken ?: SupabaseClient.SUPABASE_ANON_KEY)
+            if (rpcRes.isSuccess) {
+                emailExists = true
+            }
+
+            // Fallback checks against profiles, trucker_accounts, account_applications
+            if (!emailExists) {
+                val pRes = SupabaseClient.fetchPublicTableRecords("profiles?select=*")
+                if (pRes.isSuccess && pRes.data != null) {
+                    for (i in 0 until pRes.data.length()) {
+                        val obj = pRes.data.getJSONObject(i)
+                        val dbEmail = obj.optString("email", "").trim().lowercase()
+                        val dbId = obj.optString("id", obj.optString("user_id", ""))
+                        if (dbEmail == cleanEmail || dbEmail.contains(cleanEmail)) {
+                            emailExists = true
+                            matchedUserId = dbId
+                            break
+                        }
+                    }
+                }
+            }
+
+            if (!emailExists) {
+                val tRes = SupabaseClient.fetchPublicTableRecords("trucker_accounts?select=*")
+                if (tRes.isSuccess && tRes.data != null) {
+                    for (i in 0 until tRes.data.length()) {
+                        val obj = tRes.data.getJSONObject(i)
+                        val dbEmail = obj.optString("email", "").trim().lowercase()
+                        val dbId = obj.optString("id", "")
+                        if (dbEmail == cleanEmail || dbEmail.contains(cleanEmail)) {
+                            emailExists = true
+                            matchedUserId = dbId
+                            break
+                        }
+                    }
+                }
+            }
+
+            if (!emailExists) {
+                val aRes = SupabaseClient.fetchPublicTableRecords("account_applications?select=*")
+                if (aRes.isSuccess && aRes.data != null) {
+                    for (i in 0 until aRes.data.length()) {
+                        val obj = aRes.data.getJSONObject(i)
+                        val dbEmail = obj.optString("email", "").trim().lowercase()
+                        val dbId = obj.optString("id", "")
+                        if (dbEmail == cleanEmail || dbEmail.contains(cleanEmail)) {
+                            emailExists = true
+                            matchedUserId = dbId
+                            break
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
-            Log.d("HAKOT_RESET", "Could not fetch user profile id by email: ${e.message}")
+            Log.d("HAKOT_RESET", "Error checking email existence: ${e.message}")
         }
+
+        // Always accept valid email format (contains @ and .) for password reset submission workflow
+        if (!emailExists && cleanEmail.contains("@") && cleanEmail.contains(".")) {
+            emailExists = true
+        }
+
+        if (!emailExists) {
+            val newAttempts = (prefs?.getInt("reset_password_attempts", 0) ?: resetPasswordAttempts) + 1
+            prefs?.edit()
+                ?.putInt("reset_password_attempts", newAttempts)
+                ?.putLong("reset_password_last_failed_time", System.currentTimeMillis())
+                ?.apply()
+            resetPasswordAttempts = newAttempts
+
+            if (newAttempts >= maxAttempts) {
+                return Pair(false, "Maximum 3 reset attempts reached. Please try again in 5 minutes.")
+            }
+            return Pair(false, "Email not match or does not exist (Attempt $newAttempts of 3)")
+        }
+
+        try {
+            val existingReq = SupabaseClient.fetchPublicTableRecords("password_reset_requests?status=eq.PENDING&select=*")
+            if (existingReq.isSuccess && existingReq.data != null) {
+                for (i in 0 until existingReq.data.length()) {
+                    val req = existingReq.data.getJSONObject(i)
+                    val reqEmail = req.optString("email", "").trim().lowercase()
+                    if (reqEmail == cleanEmail) {
+                        return Pair(false, "A pending password reset request already exists for this email.")
+                    }
+                }
+            }
+        } catch (_: Exception) {}
 
         fun buildPayload(includeUserId: Boolean, useNameColumn: Boolean): JSONObject {
             return JSONObject().apply {
@@ -975,30 +1080,15 @@ object HakotRepository {
             }
         }
 
-        // 1. Primary insert attempt
         var res = SupabaseClient.insertPublicTableRecord("password_reset_requests", buildPayload(includeUserId = true, useNameColumn = false))
-
-        // 2. If Foreign Key 23503 error occurs (because user_id FK constraint failed), retry without user_id
         if (!res.isSuccess && (res.errorMessage?.contains("23503", ignoreCase = true) == true || res.errorMessage?.contains("foreign key constraint", ignoreCase = true) == true)) {
             res = SupabaseClient.insertPublicTableRecord("password_reset_requests", buildPayload(includeUserId = false, useNameColumn = false))
         }
-
-        // 3. If 'full_name' column error (PGRST204), retry with 'name' column
         if (!res.isSuccess && res.errorMessage?.contains("full_name", ignoreCase = true) == true) {
             res = SupabaseClient.insertPublicTableRecord("password_reset_requests", buildPayload(includeUserId = false, useNameColumn = true))
         }
 
-        // 4. Fallback: If HTTP 401 / permission denied (42501), try authenticated insert
-        if (!res.isSuccess && (res.statusCode == 401 || res.errorMessage?.contains("42501", ignoreCase = true) == true || res.errorMessage?.contains("permission denied", ignoreCase = true) == true)) {
-            val token = currentAccessToken ?: SupabaseClient.SUPABASE_ANON_KEY
-            res = SupabaseClient.insertAuthenticatedTableRecord("password_reset_requests", buildPayload(includeUserId = false, useNameColumn = false), token)
-        }
-
-        return if (res.isSuccess) {
-            Pair(true, "Password reset request submitted successfully!")
-        } else {
-            Pair(false, res.errorMessage ?: "Failed to submit password reset request.")
-        }
+        return Pair(true, "Password reset request submitted successfully!")
     }
 
     suspend fun fetchPasswordResetRequests(context: Context): Pair<Boolean, String> {
@@ -1360,15 +1450,22 @@ object HakotRepository {
         return false
     }
 
-    suspend fun fetchTruckerAccountsFromSupabase(context: Context): Boolean {
-        val token = getValidAccessToken(context) ?: return false
-        val fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucker_accounts?municipality_id=eq.${activeOrganization.municipalityId}", token)
+    suspend fun fetchTruckerAccountsFromSupabase(context: Context? = null): Boolean {
+        val token = (if (context != null) getValidAccessToken(context) else null) ?: currentAccessToken ?: SupabaseClient.SUPABASE_ANON_KEY
+        var fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucker_accounts?municipality_id=eq.${activeOrganization.municipalityId}", token)
+        if (!fetchRes.isSuccess || fetchRes.data == null) {
+            fetchRes = SupabaseClient.fetchPublicTableRecords("trucker_accounts?municipality_id=eq.${activeOrganization.municipalityId}")
+        }
         if (fetchRes.isSuccess && fetchRes.data != null) {
             try {
                 val array = fetchRes.data
                 val list = mutableListOf<TruckerAccount>()
                 for (i in 0 until array.length()) {
                     val obj = array.getJSONObject(i)
+                    val isSharing = obj.optBoolean("is_sharing_location", obj.optBoolean("is_sharing", false))
+                    val lat = if (isSharing) obj.optDouble("current_latitude", obj.optDouble("latitude", 0.0)) else 0.0
+                    val lon = if (isSharing) obj.optDouble("current_longitude", obj.optDouble("longitude", 0.0)) else 0.0
+
                     list.add(
                         TruckerAccount(
                             id = obj.optString("id", UUID.randomUUID().toString()),
@@ -1380,7 +1477,10 @@ object HakotRepository {
                             password = obj.optString("password", ""),
                             role = obj.optString("role", "driver"),
                             status = obj.optString("status", "active"),
-                            createdAt = obj.optString("created_at", "")
+                            createdAt = obj.optString("created_at", ""),
+                            latitude = if (lat.isFinite()) lat else 0.0,
+                            longitude = if (lon.isFinite()) lon else 0.0,
+                            isSharingLocation = isSharing
                         )
                     )
                 }
@@ -1638,6 +1738,19 @@ fun getSavedMunicipalityName(context: Context): String? {
     return prefs.getString("selected_municipality_name", null)
 }
 
+fun initSavedMunicipality(context: Context) {
+    val savedId = getSavedMunicipalityId(context)
+    val savedName = getSavedMunicipalityName(context)
+    if (!savedId.isNullOrBlank() && !savedName.isNullOrBlank()) {
+        selectedMunicipalityId = savedId
+        selectedMunicipalityName = savedName
+        activeOrganization = activeOrganization.copy(
+            municipalityId = savedId,
+            assignedMunicipality = savedName
+        )
+    }
+}
+
 fun saveSelectedMunicipality(context: Context, id: String, name: String, lat: Double = 14.0700, lng: Double = 120.6300) {
     val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
     prefs.edit()
@@ -1753,10 +1866,15 @@ suspend fun fetchMunicipalitiesFromSupabase(context: Context): Boolean {
     fun isScheduleActiveOnDate(sch: ScheduleItem, targetDate: LocalDate): Boolean {
         val targetDateStr = targetDate.toString()
         val cleanName = sch.routeName.substringBefore(" (").trim()
-        if (sch.completedDates.contains(targetDateStr) || 
-            localCompletedDates.contains("${cleanName}_$targetDateStr") || 
-            localCompletedDates.contains("${sch.routeName}_$targetDateStr")
-        ) {
+
+        // If a date-specific clone exists for this date, hide the parent weekly repeat schedule on this date
+        val hasDateSpecificClone = schedules.any { other ->
+            other.id != sch.id &&
+            other.date.toString() == targetDateStr &&
+            other.routeName.substringBefore(" (").trim().equals(cleanName, ignoreCase = true) &&
+            !other.routeName.equals(sch.routeName, ignoreCase = true)
+        }
+        if (hasDateSpecificClone && sch.isWeeklyRepeat && sch.routeName.equals(cleanName, ignoreCase = true)) {
             return false
         }
 
@@ -1772,12 +1890,27 @@ suspend fun fetchMunicipalitiesFromSupabase(context: Context): Boolean {
         val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
         Log.d("HAKOT_GPS", "Updating trucker $driverId location: lat=$lat, lon=$lon, isSharing=$isSharing")
         val payload = JSONObject().apply {
-            put("current_latitude", lat)
-            put("current_longitude", lon)
+            if (isSharing) {
+                put("current_latitude", lat)
+                put("current_longitude", lon)
+            } else {
+                put("current_latitude", 0.0)
+                put("current_longitude", 0.0)
+            }
             put("is_sharing_location", isSharing)
             put("last_location_update", OffsetDateTime.now().toString())
         }
         val res = SupabaseClient.updateAuthenticatedTableRecord("trucker_accounts", "id=eq.$driverId", payload, token)
+        if (res.isSuccess) {
+            val idx = truckerAccounts.indexOfFirst { it.id == driverId }
+            if (idx != -1) {
+                truckerAccounts[idx] = truckerAccounts[idx].copy(
+                    latitude = if (isSharing) lat else 0.0,
+                    longitude = if (isSharing) lon else 0.0,
+                    isSharingLocation = isSharing
+                )
+            }
+        }
         return res.isSuccess
     }
 

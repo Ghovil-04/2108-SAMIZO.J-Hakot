@@ -336,6 +336,14 @@ fun ScheduleScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        Text(
+            text = "Collection Schedules List (${schedulesForDate.size})",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = EcoGreenLight
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
         // Schedule List for Selected Date
         if (schedulesForDate.isEmpty()) {
             Box(

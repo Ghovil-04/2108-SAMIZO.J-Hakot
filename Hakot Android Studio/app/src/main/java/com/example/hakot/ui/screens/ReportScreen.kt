@@ -27,6 +27,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -43,7 +44,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hakot.data.HakotRepository
@@ -94,29 +98,36 @@ fun ReportScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
                 Icon(
                     imageVector = Icons.Default.ReportProblem,
                     contentDescription = "Report",
                     tint = HazardousRed,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(22.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Report Waste Issue",
-                    fontSize = 18.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TextOnDarkPrimary
+                    color = TextOnDarkPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+
+            Spacer(modifier = Modifier.width(8.dp))
 
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
                     .background(EcoGreenContainer)
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                Text("100% Anonymous", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                Text("100% Anonymous", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
             }
         }
 
@@ -170,7 +181,14 @@ fun ReportScreen(
             Text("Issue Category:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
             Spacer(modifier = Modifier.height(4.dp))
 
-            Box(modifier = Modifier.fillMaxWidth()) {
+            var boxWidth by remember { mutableStateOf(0) }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        boxWidth = coordinates.size.width
+                    }
+            ) {
                 Surface(
                     onClick = { if (!isSubmitting) isCategoryDropdownExpanded = !isCategoryDropdownExpanded },
                     color = HazardousRedContainer,
@@ -222,20 +240,20 @@ fun ReportScreen(
                 DropdownMenu(
                     expanded = isCategoryDropdownExpanded,
                     onDismissRequest = { isCategoryDropdownExpanded = false },
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .background(DarkSurfaceCard)
+                    containerColor = DarkSurfaceCard,
+                    modifier = Modifier.width(with(LocalDensity.current) { boxWidth.toDp() })
                 ) {
-                    ReportType.entries.forEach { type ->
+                    ReportType.entries.forEachIndexed { index, type ->
                         DropdownMenuItem(
                             text = {
-                                Column {
+                                Column(modifier = Modifier.padding(vertical = 6.dp)) {
                                     Text(
                                         text = type.title,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (type == selectedType) HazardousRed else TextOnDarkPrimary
                                     )
+                                    Spacer(modifier = Modifier.height(2.dp))
                                     Text(
                                         text = type.description,
                                         fontSize = 10.sp,
@@ -256,6 +274,9 @@ fun ReportScreen(
                                 isCategoryDropdownExpanded = false
                             }
                         )
+                        if (index < ReportType.entries.size - 1) {
+                            HorizontalDivider(color = DarkBorder.copy(alpha = 0.4f), thickness = 0.5.dp)
+                        }
                     }
                 }
             }

@@ -1288,7 +1288,7 @@ fun AdminLoginScreen(
                                     } else {
                                         scope.launch {
                                             isSubmittingReset = true
-                                            val (success, msg) = HakotRepository.submitPasswordResetRequest(resetNameInput, resetGmailInput)
+                                            val (success, msg) = HakotRepository.submitPasswordResetRequest(resetNameInput, resetGmailInput, context)
                                             isSubmittingReset = false
                                             if (success) {
                                                 submittedEmailDisplay = resetGmailInput.trim()
@@ -1416,6 +1416,36 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
         HakotRepository.fetchTrucksFromSupabase(context)
         HakotRepository.fetchSchedulesFromSupabase(context)
         isLoadingSchedules = false
+
+        // Connect to actual device/emulator GPS location
+        try {
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            if (locationManager != null) {
+                val loc = try {
+                    locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                        ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                } catch (e: SecurityException) {
+                    null
+                }
+                if (loc != null) {
+                    broadcastLiveLat = loc.latitude
+                    broadcastLiveLon = loc.longitude
+                }
+
+                try {
+                    locationManager.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER,
+                        2000L,
+                        1f
+                    ) { location ->
+                        broadcastLiveLat = location.latitude
+                        broadcastLiveLon = location.longitude
+                    }
+                } catch (_: SecurityException) {}
+            }
+        } catch (e: Exception) {
+            Log.e("HAKOT_GPS", "Error connecting to device location manager", e)
+        }
     }
 
     var selectedTruckInUse by remember(driver, HakotRepository.trucks.size) {
@@ -2113,6 +2143,16 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                     HakotRepository.schedules.clear()
                                     HakotRepository.schedules.addAll(temp)
                                 }
+                                val remainingActive = HakotRepository.schedules.filter { s ->
+                                    s.id != sch.id && (s.status == "ACTIVE" || s.status == "ON_HOLD" || s.status == "IN_PROGRESS") &&
+                                    (s.truckAssigned.contains(driver?.fullName ?: "", ignoreCase = true) || s.truckAssigned.contains(driver?.email ?: "", ignoreCase = true))
+                                }
+                                if (remainingActive.isEmpty()) {
+                                    isSharingLocation = false
+                                    if (driver?.userId != null) {
+                                        HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, false, context)
+                                    }
+                                }
                                 Toast.makeText(context, "Collection marked as COMPLETED for $targetDateStr!", Toast.LENGTH_SHORT).show()
                             }
                             scheduleToCompleteConfirm = null
@@ -2132,14 +2172,24 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
         )
     }
 
+    var syncCountdown by remember { mutableIntStateOf(30) }
+
     if (showGpsBroadcastModal) {
-        // 30-second periodic database sync when sharing is active
+        // 30-second periodic database sync and live countdown when sharing is active
         LaunchedEffect(isSharingLocation) {
+            if (isSharingLocation) {
+                syncCountdown = 30
+            }
             while (isSharingLocation) {
-                delay(30_000L)
-                if (driver?.userId != null) {
-                    HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, true, context)
-                    Log.d("HAKOT_GPS", "30s Periodic location recalculate & sync: lat=$broadcastLiveLat, lon=$broadcastLiveLon")
+                delay(1_000L)
+                if (syncCountdown > 1) {
+                    syncCountdown--
+                } else {
+                    syncCountdown = 30
+                    if (driver?.userId != null) {
+                        HakotRepository.updateTruckerLocationInSupabase(driver.userId, broadcastLiveLat, broadcastLiveLon, true, context)
+                        Log.d("HAKOT_GPS", "30s Periodic location recalculate & sync: lat=$broadcastLiveLat, lon=$broadcastLiveLon")
+                    }
                 }
             }
         }
@@ -2186,7 +2236,8 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                     ) {
                         DarkMapView(
                             modifier = Modifier.fillMaxSize(),
-                            customRoutePoints = currentGpsList
+                            customRoutePoints = currentGpsList,
+                            autoCenterSinglePoint = true
                         )
                     }
 
@@ -2199,7 +2250,7 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                             Text("Vehicle: ${selectedTruckInUse?.truckCode ?: "Truck"} (${selectedTruckInUse?.plateNumber ?: "N/A"})", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
                             Text("Operator: ${driver?.fullName ?: "Driver"}", fontSize = 11.sp, color = TextOnDarkSecondary)
                             Text(
-                                text = if (isSharingLocation) "🔴 Status: GPS Active & Broadcasting Live (Auto-syncing every 30s)" else "🟢 Status: GPS Active & Ready (Not Sharing)",
+                                text = if (isSharingLocation) "🔴 Status: GPS Active & Broadcasting Live (Next sync in ${syncCountdown}s)" else "🟢 Status: GPS Active & Ready (Not Sharing)",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isSharingLocation) HazardousRed else EcoGreenLight
@@ -2545,6 +2596,7 @@ fun DistrictOverviewView() {
                 }
                 val routeSegmentsList = mutableListOf<List<GeoPoint>>()
                 activeSchedulesForDate.forEach { schedule ->
+                    val segsList = mutableListOf<List<GeoPoint>>()
                     if (schedule.orderedSegments.isNotEmpty()) {
                         schedule.orderedSegments.forEach { seg ->
                             val baseSeg = GisManager.roadSegments.find { it.id == seg.id } ?: seg
@@ -2559,22 +2611,36 @@ fun DistrictOverviewView() {
                             val points = coords.mapNotNull { (lng, lat) ->
                                 if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
                             }
-                            if (points.size >= 2) routeSegmentsList.add(points)
+                            if (points.size >= 2) segsList.add(points)
                         }
-                    } else {
+                    }
+                    if (segsList.isEmpty()) {
                         val r = HakotRepository.routes.find { it.routeName.equals(schedule.routeName, ignoreCase = true) }
                         val rPts = r?.geoPoints?.mapNotNull { (lng, lat) ->
                             if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
                         } ?: emptyList()
-                        if (rPts.size >= 2) routeSegmentsList.add(rPts)
+                        if (rPts.size >= 2) {
+                            segsList.add(rPts)
+                        } else {
+                            val bgyRoads = GisManager.getRoadSegmentsInBarangay(schedule.barangay)
+                            bgyRoads.forEach { seg ->
+                                val rawCoords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+                                val points = rawCoords.mapNotNull { (lng, lat) ->
+                                    if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                                }
+                                if (points.size >= 2) segsList.add(points)
+                            }
+                        }
                     }
+                    routeSegmentsList.addAll(segsList)
                 }
                 val routePoints = routeSegmentsList.flatten()
 
                 DarkMapView(
                     modifier = Modifier.fillMaxSize(),
                     customRoutePoints = routePoints,
-                    customRouteSegments = routeSegmentsList
+                    customRouteSegments = routeSegmentsList,
+                    showDefaultSchedulesWhenEmpty = false
                 )
             }
 
@@ -2597,7 +2663,9 @@ fun DistrictOverviewView() {
                 filtered.ifEmpty { listOf(today) }
             }
 
-            LaunchedEffect(daysWithSchedulesList) {
+            LaunchedEffect(daysWithSchedulesList, selectedMapDate) {
+                HakotRepository.selectedFocusSchedule = null
+                HakotRepository.selectedMapDate = selectedMapDate
                 if (daysWithSchedulesList.isNotEmpty() && !daysWithSchedulesList.contains(selectedMapDate)) {
                     selectedMapDate = daysWithSchedulesList.first()
                 }
@@ -2610,7 +2678,11 @@ fun DistrictOverviewView() {
                         val label = if (dateItem == today) "Today" else dateItem.format(dateFmt)
                         FilterChip(
                             selected = isSelected,
-                            onClick = { selectedMapDate = dateItem },
+                            onClick = {
+                                selectedMapDate = dateItem
+                                HakotRepository.selectedMapDate = dateItem
+                                HakotRepository.selectedFocusSchedule = null
+                            },
                             label = { Text(label, fontSize = 10.sp) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = EcoGreenContainer,

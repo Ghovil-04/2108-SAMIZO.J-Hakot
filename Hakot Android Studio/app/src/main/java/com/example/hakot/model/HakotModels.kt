@@ -416,7 +416,10 @@ data class TruckerAccount(
     val password: String,
     val role: String = "driver",
     val status: String = "active",
-    val createdAt: String? = null
+    val createdAt: String? = null,
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val isSharingLocation: Boolean = false
 )
 
 

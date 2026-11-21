@@ -1,5 +1,6 @@
 package com.example.hakot.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.LocationCity
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.Recycling
@@ -41,6 +43,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,12 +56,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurface
+import com.example.hakot.ui.theme.DarkSurfaceCard
 import com.example.hakot.ui.theme.EcoGreenContainer
+import com.example.hakot.ui.theme.EcoGreenLight
 import com.example.hakot.ui.theme.EcoGreenPrimary
 import com.example.hakot.ui.theme.HazardousRed
 import com.example.hakot.ui.theme.TextOnDarkMuted
@@ -72,9 +78,14 @@ fun HakotDrawerContent(
     onChangeMunicipality: () -> Unit = {},
     onCloseDrawer: () -> Unit
 ) {
+    val context = LocalContext.current
     var showPinDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var notificationsEnabled by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        HakotRepository.fetchMunicipalitiesFromSupabase(context)
+    }
 
     ModalDrawerSheet(
         drawerContainerColor = DarkSurface,
@@ -213,12 +224,18 @@ fun HakotDrawerContent(
             Spacer(modifier = Modifier.weight(1f))
 
             HorizontalDivider(color = DarkBorder)
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val currentMunId = HakotRepository.activeOrganization.municipalityId.takeIf { it.isNotBlank() }
+                ?: HakotRepository.municipalities.firstOrNull()?.id
+                ?: "cb394eb7-a8b7-45f2-a314-3926baeab31f"
 
             Text(
-                text = "Hakot App v1.0.0 • LGU Waste Management System",
-                fontSize = 10.sp,
-                color = TextOnDarkMuted
+                text = "Hakot App v1.0.0 • ID: $currentMunId • LGU System",
+                fontSize = 9.sp,
+                color = TextOnDarkMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
