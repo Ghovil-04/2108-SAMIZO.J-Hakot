@@ -83,6 +83,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hakot.data.HakotRepository
@@ -98,6 +99,7 @@ import com.example.hakot.ui.theme.DarkSurfaceVariant
 import com.example.hakot.ui.theme.EcoGreenContainer
 import com.example.hakot.ui.theme.EcoGreenLight
 import com.example.hakot.ui.theme.EcoGreenPrimary
+import com.example.hakot.ui.theme.SafetyOrange
 import com.example.hakot.ui.theme.HazardousRed
 import com.example.hakot.ui.theme.HazardousRedContainer
 import com.example.hakot.ui.theme.RecycleYellow
@@ -117,8 +119,6 @@ fun HomeScreen(
     onQueryChange: (String) -> Unit = {},
     onMenuClick: () -> Unit = {},
     isAdminMode: Boolean = false,
-    initialShowReportDialog: Boolean = false,
-    onReportDialogDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -136,7 +136,7 @@ fun HomeScreen(
         }
     }
 
-    var showReportDialog by remember(initialShowReportDialog) { mutableStateOf(initialShowReportDialog) }
+    var showReportDialog by remember { mutableStateOf(false) }
     var selectedReportType by remember { mutableStateOf(ReportType.MISSED_COLLECTION) }
     var isMapInteracting by remember { mutableStateOf(false) }
 
@@ -150,14 +150,14 @@ fun HomeScreen(
                 isAdminMode = isAdminMode
             )
 
-            // Map Container in standing rectangle format enclosed by a thick edge border and side margins
+            // Map Container in standing rectangle format with reduced height and consistent 14.dp rounded corners
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(0.92f) // Slightly reduced height (~8%)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(4.dp, DarkBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(14.dp)) // Consistent 14.dp rounded corners matching content cards
+                    .border(4.dp, DarkBorder, RoundedCornerShape(14.dp))
             ) {
                 DarkMapView(
                     searchQuery = searchQuery,
@@ -168,7 +168,10 @@ fun HomeScreen(
                 )
             }
 
-            // Fixed Non-Draggable Bottom Box for Today's Schedules (Box shape, no round top edges)
+            // Spacing between Map and Schedule section
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Fixed Non-Draggable Bottom Box for Today's Schedules (Consistent margins & spacing)
             Surface(
                 color = DarkSurface,
                 shape = RectangleShape,
@@ -178,30 +181,33 @@ fun HomeScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
                     // Header: Today's Schedules
                     val todayDate = LocalDate.now()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 8.dp),
+                            .padding(bottom = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "Today's Schedules",
-                            fontSize = 16.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = TextOnDarkPrimary
                         )
                         Text(
                             text = todayDate.format(DateTimeFormatter.ofPattern("EEE, MMM d")),
-                            fontSize = 12.sp,
+                            fontSize = 10.sp, // Reduced font size of date slightly
                             fontWeight = FontWeight.SemiBold,
                             color = EcoGreenPrimary
                         )
                     }
+
+                    // Add more spacing between heading and collection card
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Filter strictly for today's schedules from database public.schedules (no fallback to other dates)
                     val todaySchedules = HakotRepository.schedules.filter { sch ->
@@ -215,21 +221,32 @@ fun HomeScreen(
                             EmptyCollectionStatusCard(modifier = Modifier.fillMaxWidth())
                         }
                         displaySchedules.size == 1 -> {
+                            val sch = displaySchedules.firstOrNull()
                             CollectionStatusCardItem(
-                                schedule = displaySchedules.firstOrNull(),
-                                modifier = Modifier.fillMaxWidth()
+                                schedule = sch,
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    if (sch != null) {
+                                        HakotRepository.selectedMapDate = sch.date
+                                        HakotRepository.selectedFocusSchedule = sch
+                                    }
+                                }
                             )
                         }
                         else -> { // 2 or more schedules: swipable horizontal list (LazyRow)
                             LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                contentPadding = PaddingValues(end = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                contentPadding = PaddingValues(end = 12.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 items(displaySchedules) { sch ->
                                     CollectionStatusCardItem(
                                         schedule = sch,
-                                        modifier = Modifier.width(300.dp)
+                                        modifier = Modifier.width(260.dp),
+                                        onClick = {
+                                            HakotRepository.selectedMapDate = sch.date
+                                            HakotRepository.selectedFocusSchedule = sch
+                                        }
                                     )
                                 }
                             }
@@ -243,14 +260,8 @@ fun HomeScreen(
         if (showReportDialog) {
             AnonymousReportModal(
                 initialType = selectedReportType,
-                onDismiss = {
-                    showReportDialog = false
-                    onReportDialogDismiss()
-                },
-                onSubmitSuccess = { refCode ->
-                    showReportDialog = false
-                    onReportDialogDismiss()
-                }
+                onDismiss = { showReportDialog = false },
+                onSubmitSuccess = { showReportDialog = false }
             )
         }
     }
@@ -634,68 +645,78 @@ fun CollectionStatusCardItem(
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {}
 ) {
-    val truckName = schedule?.truckAssigned?.takeIf { it.isNotBlank() } ?: "Truck #01"
+    val truckName = schedule?.truckAssigned?.takeIf { it.isNotBlank() } ?: "No assigned truck yet"
     val assignedArea = schedule?.barangay?.takeIf { it.isNotBlank() } ?: "Wawa → Bucana"
     val scheduleTime = if (schedule != null) "${schedule.startTime} – ${schedule.endTime}" else "08:00 – 11:30 AM"
+    val cardStatus = if (schedule != null) HakotRepository.getDisplayStatus(schedule.status) else "UPCOMING"
 
     Card(
         colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-        shape = RoundedCornerShape(20.dp),
-        modifier = modifier.clickable { onClick() }
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, DarkBorder),
+        modifier = modifier.clickable {
+            if (schedule != null) {
+                HakotRepository.selectedMapDate = schedule.date
+                HakotRepository.selectedFocusSchedule = schedule
+            }
+            onClick()
+        }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(14.dp)
         ) {
-            // Header: Collection status
+            // Header: Status of the schedule
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Collection status",
-                    fontSize = 16.sp,
+                    text = cardStatus,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TextOnDarkPrimary
+                    color = SafetyOrange
                 )
-                if (schedule != null && schedule.routeName.isNotBlank()) {
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Visually Distinct Truck Assignment Status Box
+            Surface(
+                color = DarkSurfaceVariant,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, DarkBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_truck),
+                        contentDescription = "Truck",
+                        tint = EcoGreenPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Text(
-                        text = schedule.routeName,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = EcoGreenPrimary
+                        text = truckName,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextOnDarkPrimary
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Truck Name Row
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_truck),
-                    contentDescription = "Truck",
-                    tint = EcoGreenPrimary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    text = truckName,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextOnDarkPrimary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             HorizontalDivider(color = DarkBorder, thickness = 1.dp)
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // Assigned Area Row
             Row(
@@ -705,18 +726,20 @@ fun CollectionStatusCardItem(
             ) {
                 Text(
                     text = "Assigned area",
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     color = TextOnDarkSecondary
                 )
                 Text(
                     text = assignedArea,
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextOnDarkPrimary
+                    color = TextOnDarkPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             // Schedule Row
             Row(
@@ -726,14 +749,16 @@ fun CollectionStatusCardItem(
             ) {
                 Text(
                     text = "Schedule",
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     color = TextOnDarkSecondary
                 )
                 Text(
                     text = scheduleTime,
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextOnDarkPrimary
+                    color = TextOnDarkPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -744,13 +769,13 @@ fun CollectionStatusCardItem(
 fun EmptyCollectionStatusCard(modifier: Modifier = Modifier) {
     Card(
         colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(14.dp),
         modifier = modifier
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp),
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -758,19 +783,19 @@ fun EmptyCollectionStatusCard(modifier: Modifier = Modifier) {
                 painter = painterResource(id = R.drawable.ic_truck),
                 contentDescription = "No Schedule",
                 tint = TextOnDarkMuted,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(24.dp)
             )
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "No Collection Schedule Today",
-                fontSize = 15.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = TextOnDarkPrimary
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = "Check the Schedules tab for upcoming municipal waste collection routes.",
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 color = TextOnDarkSecondary,
                 textAlign = TextAlign.Center
             )

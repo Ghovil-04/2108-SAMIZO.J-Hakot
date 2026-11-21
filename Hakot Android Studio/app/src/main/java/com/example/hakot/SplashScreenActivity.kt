@@ -47,7 +47,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.hakot.data.HakotRepository
+import com.example.hakot.ui.theme.DarkSurfaceCard
 import com.example.hakot.ui.theme.HakotTheme
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
@@ -56,6 +60,11 @@ import org.maplibre.android.MapLibre
 class SplashScreenActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.navigationBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
         enableEdgeToEdge()
         setContent {
             HakotTheme {
@@ -115,7 +124,7 @@ fun SplashScreen(onTimeout: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF1F513B)),
+            .background(DarkSurfaceCard),
         contentAlignment = Alignment.Center
     ) {
         Column(

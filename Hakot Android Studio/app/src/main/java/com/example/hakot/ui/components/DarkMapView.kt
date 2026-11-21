@@ -17,15 +17,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -44,10 +47,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.hakot.data.GisManager
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.data.GisRoadSegmentFeature
 import com.example.hakot.data.OsrmRoutingHelper
+import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurfaceCard
+import com.example.hakot.ui.theme.EcoGreenPrimary
 import com.example.hakot.ui.theme.TextOnDarkPrimary
 import com.example.hakot.ui.theme.TextOnDarkSecondary
 import kotlinx.coroutines.Job
@@ -94,7 +100,8 @@ fun DarkMapView(
     onMapClick: ((LatLng) -> Unit)? = null,
     barangayRoads: List<GisRoadSegmentFeature> = emptyList(),
     selectedRoadIds: List<String> = emptyList(),
-    autoCenterSinglePoint: Boolean = false
+    autoCenterSinglePoint: Boolean = false,
+    showDefaultSchedulesWhenEmpty: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -125,10 +132,40 @@ fun DarkMapView(
         }
     }
 
-    LaunchedEffect(HakotRepository.selectedMapDate, HakotRepository.schedules.size, customRoutePoints, customRouteSegments, barangayRoads, selectedRoadIds) {
-        val segmentsToUse = if (customRouteSegments.isNotEmpty()) {
+    LaunchedEffect(HakotRepository.selectedMapDate, HakotRepository.selectedFocusSchedule, HakotRepository.schedules.size, customRoutePoints, customRouteSegments, barangayRoads, selectedRoadIds, showDefaultSchedulesWhenEmpty) {
+        val focusSch = HakotRepository.selectedFocusSchedule
+        val segmentsToUse = if (focusSch != null) {
+            val orderedPts = focusSch.orderedSegments.mapNotNull { seg ->
+                val coords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+                val pts = coords.mapNotNull { (lng, lat) ->
+                    if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                }
+                if (pts.size >= 2) pts else null
+            }
+            if (orderedPts.isNotEmpty()) {
+                orderedPts
+            } else {
+                val routeMatch = HakotRepository.routes.find { it.routeName.equals(focusSch.routeName, ignoreCase = true) }
+                val routePts = routeMatch?.geoPoints?.mapNotNull { (lng, lat) ->
+                    if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                } ?: emptyList()
+
+                if (routePts.size >= 2) {
+                    listOf(routePts)
+                } else {
+                    val bgyRoads = GisManager.getRoadSegmentsInBarangay(focusSch.barangay)
+                    bgyRoads.mapNotNull { seg ->
+                        val coords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
+                        val pts = coords.mapNotNull { (lng, lat) ->
+                            if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
+                        }
+                        if (pts.size >= 2) pts else null
+                    }
+                }
+            }
+        } else if (customRouteSegments.isNotEmpty()) {
             customRouteSegments
-        } else {
+        } else if (showDefaultSchedulesWhenEmpty) {
             val todayDate = HakotRepository.selectedMapDate
             val todaySchedules = HakotRepository.schedules.filter { sch ->
                 HakotRepository.isScheduleActiveOnDate(sch, todayDate)
@@ -144,14 +181,18 @@ fun DarkMapView(
                 }
             }
             allSegs
+        } else {
+            emptyList()
         }
         fetchedRouteSegments = segmentsToUse
-        val pointsToRender = if (customRoutePoints.isNotEmpty()) {
+        val pointsToRender = if (focusSch != null) {
+            val focusSegs = segmentsToUse
+            if (focusSegs.isNotEmpty()) focusSegs.flatten() else customRoutePoints
+        } else if (customRoutePoints.isNotEmpty()) {
             customRoutePoints
         } else if (segmentsToUse.isNotEmpty()) {
             segmentsToUse.flatten()
         } else {
-            Log.w("HAKOT_ROUTE", "WARNING: customRoutePoints is empty. No route line will be rendered; no fallback route substituted.")
             emptyList()
         }
         fetchedRoutePoints = pointsToRender
@@ -280,6 +321,52 @@ fun DarkMapView(
                 mapView.onPause()
                 mapView.onStop()
                 mapView.onDestroy()
+            }
+        }
+
+        // Floating Recenter Map Button
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            contentAlignment = Alignment.BottomEnd
+        ) {
+            Surface(
+                onClick = {
+                    mapLibreMapInstance?.let { maplibreMap ->
+                        val validPts = fetchedRoutePoints.filter { it.longitude.isFinite() && it.latitude.isFinite() && it.longitude in -180.0..180.0 && it.latitude in -90.0..90.0 }
+                        if (validPts.isNotEmpty()) {
+                            if (validPts.size == 1) {
+                                val pt = validPts[0]
+                                maplibreMap.easeCamera(CameraUpdateFactory.newLatLngZoom(LatLng(pt.latitude, pt.longitude), 16.0), 400)
+                            } else {
+                                val bounds = LatLngBounds.Builder().apply {
+                                    validPts.forEach { include(LatLng(it.latitude, it.longitude)) }
+                                }.build()
+                                maplibreMap.easeCamera(CameraUpdateFactory.newLatLngBounds(bounds, 60), 400)
+                            }
+                        } else {
+                            maplibreMap.easeCamera(CameraUpdateFactory.newLatLngZoom(nasugbuCenter, 15.0), 400)
+                        }
+                    }
+                },
+                shape = CircleShape,
+                color = DarkSurfaceCard,
+                border = BorderStroke(1.dp, DarkBorder),
+                shadowElevation = 6.dp,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MyLocation,
+                        contentDescription = "Recenter Map",
+                        tint = EcoGreenPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
 
@@ -451,7 +538,7 @@ private fun setupMapLibreRouteOverlay(
                 val lineLayer = LineLayer(layerId, sourceId).apply {
                     setProperties(
                         PropertyFactory.lineGradient(gradientExpr),
-                        PropertyFactory.lineWidth(7f),
+                        PropertyFactory.lineWidth(5.5f),
                         PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
                     )

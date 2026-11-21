@@ -49,6 +49,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -259,7 +260,7 @@ fun AdminScreen(
                     .fillMaxSize()
                     .background(DarkBackground)
             ) {
-                // Top Admin Banner with Sign Out
+                // Top Admin Banner with Sign Out Icon Button (Thinned header)
                 Surface(
                     color = EcoGreenContainer,
                     border = BorderStroke(1.dp, EcoGreenPrimary)
@@ -267,7 +268,7 @@ fun AdminScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -276,13 +277,13 @@ fun AdminScreen(
                                 imageVector = Icons.Default.AdminPanelSettings,
                                 contentDescription = "District Admin",
                                 tint = EcoGreenPrimary,
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(20.dp)
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
                                     text = "MUNICIPAL SANITATION PORTAL",
-                                    fontSize = 15.sp,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = TextOnDarkPrimary
                                 )
@@ -290,26 +291,31 @@ fun AdminScreen(
                                 val dateText = LocalDate.now().format(dateFmt)
                                 Text(
                                     text = "$dateText • 🕒 $liveClockString",
-                                    fontSize = 13.sp,
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = EcoGreenLight
                                 )
                             }
                         }
 
-                        Button(
+                        IconButton(
                             onClick = {
                                 scope.launch {
                                     HakotRepository.logout(context)
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceCard),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(DarkSurfaceCard)
+                                .border(1.dp, HazardousRed.copy(alpha = 0.5f), CircleShape)
                         ) {
-                            Icon(imageVector = Icons.Default.Logout, contentDescription = "Logout", tint = HazardousRed, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Sign Out", fontSize = 11.sp, color = TextOnDarkPrimary)
+                            Icon(
+                                imageVector = Icons.Default.Logout,
+                                contentDescription = "Sign Out",
+                                tint = HazardousRed,
+                                modifier = Modifier.size(15.dp)
+                            )
                         }
                     }
                 }
@@ -2517,20 +2523,30 @@ fun DistrictOverviewView() {
                 val activeSchedulesForDate = HakotRepository.schedules.filter { sch ->
                     !sch.isDisabled && (sch.date == selectedMapDate || HakotRepository.isScheduleActiveOnDate(sch, selectedMapDate))
                 }
-                val routeSegmentsList = activeSchedulesForDate.mapNotNull { schedule ->
+                val routeSegmentsList = mutableListOf<List<GeoPoint>>()
+                activeSchedulesForDate.forEach { schedule ->
                     if (schedule.orderedSegments.isNotEmpty()) {
-                        schedule.orderedSegments.mapNotNull { seg ->
-                            val coords = if (seg.clippedCoordinates.isNotEmpty()) seg.clippedCoordinates else seg.lineStringCoordinates
-                            val pts = coords.mapNotNull { (lng, lat) ->
+                        schedule.orderedSegments.forEach { seg ->
+                            val baseSeg = GisManager.roadSegments.find { it.id == seg.id } ?: seg
+                            val rawCoords = when {
+                                seg.clippedCoordinates.isNotEmpty() -> seg.clippedCoordinates
+                                seg.lineStringCoordinates.isNotEmpty() -> seg.lineStringCoordinates
+                                baseSeg.clippedCoordinates.isNotEmpty() -> baseSeg.clippedCoordinates
+                                baseSeg.lineStringCoordinates.isNotEmpty() -> baseSeg.lineStringCoordinates
+                                else -> emptyList()
+                            }
+                            val coords = if (seg.isReversed) rawCoords.reversed() else rawCoords
+                            val points = coords.mapNotNull { (lng, lat) ->
                                 if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
                             }
-                            if (pts.size >= 2) pts else null
-                        }.flatten()
+                            if (points.size >= 2) routeSegmentsList.add(points)
+                        }
                     } else {
                         val r = HakotRepository.routes.find { it.routeName.equals(schedule.routeName, ignoreCase = true) }
-                        r?.geoPoints?.mapNotNull { (lng, lat) ->
+                        val rPts = r?.geoPoints?.mapNotNull { (lng, lat) ->
                             if (lng.isFinite() && lat.isFinite() && lng in -180.0..180.0 && lat in -90.0..90.0) GeoPoint(lat, lng) else null
                         } ?: emptyList()
+                        if (rPts.size >= 2) routeSegmentsList.add(rPts)
                     }
                 }
                 val routePoints = routeSegmentsList.flatten()
@@ -3435,13 +3451,24 @@ fun MapRoutePlannerScreen(
 ) {
     val context = LocalContext.current
     var isGisLoading by remember { mutableStateOf(!GisManager.isLoaded) }
-    var selectedDumpsiteName by remember { mutableStateOf(HakotRepository.dumpsites.firstOrNull()?.name ?: "Nasugbu MRF Facility") }
+    var selectedDumpsiteName by remember { mutableStateOf(HakotRepository.dumpsites.firstOrNull()?.name ?: "no dumpsite") }
 
     LaunchedEffect(Unit) {
         if (!GisManager.isLoaded) {
             isGisLoading = true
             GisManager.loadGisData()
             isGisLoading = false
+        }
+        try {
+            HakotRepository.fetchDumpsitesFromSupabase(context)
+            if (HakotRepository.dumpsites.isNotEmpty()) {
+                selectedDumpsiteName = HakotRepository.dumpsites.first().name
+            } else {
+                selectedDumpsiteName = "no dumpsite"
+            }
+        } catch (e: Exception) {
+            Log.e("HAKOT_ADMIN", "Error fetching dumpsites in route planner", e)
+            selectedDumpsiteName = "no dumpsite"
         }
     }
 
@@ -3513,227 +3540,259 @@ fun MapRoutePlannerScreen(
             }
         }
     } else {
-        Box(modifier = Modifier.fillMaxSize().background(DarkBackground)) {
-            DarkMapView(
-                modifier = Modifier.fillMaxSize(),
-                customRoutePoints = routeGeoPoints,
-                customRouteSegments = routeSegmentsList,
-                barangayRoads = availableRoads,
-                selectedRoadIds = selectedRoadSegmentIds
-            )
-
-        // Top Toolbar
-        Surface(
-            color = DarkSurface,
-            modifier = Modifier
-                .fillMaxWidth()
-                .zIndex(10f)
-                .align(Alignment.TopCenter)
-                .pointerInput(Unit) {},
-            border = BorderStroke(1.dp, DarkBorder)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onDismiss) {
-                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkPrimary)
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("PLAN NEW ROUTE", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                    Text("$selectedBarangay • Selected roads: ${selectedGisSegments.size}", fontSize = 10.sp, color = TextOnDarkPrimary)
-                }
-                Button(
-                    onClick = {
-                        if (selectedGisSegments.isEmpty()) {
-                            val fallbackRoads = availableRoads.ifEmpty { GisManager.roadSegments }
-                            if (fallbackRoads.isNotEmpty()) {
-                                selectedRoadSegmentIds = fallbackRoads.map { it.id }
-                            }
-                        }
-                        showReviewDialog = true
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Text("Finish Route", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // Bottom Selection Panel with Searchable Barangay Chips & Available Roads Checklist
-        Surface(
-            color = DarkSurfaceCard,
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.60f)
-                .zIndex(10f)
-                .align(Alignment.BottomCenter)
-                .pointerInput(Unit) {},
-            shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
-            border = BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+        Column(modifier = Modifier.fillMaxSize().background(DarkBackground)) {
+            // Top Toolbar Surface
+            Surface(
+                color = DarkSurface,
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, DarkBorder)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("1. Select Barangay (${GisManager.barangays.size} Available):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                    Text("Selected: ${selectedRoadSegmentIds.size} roads", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenPrimary)
-                }
-
-                OutlinedTextField(
-                    value = bgySearchQuery,
-                    onValueChange = { bgySearchQuery = it },
-                    label = { Text("Search barangay (e.g. Barangay 6, Aga)...") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EcoGreenPrimary,
-                        unfocusedBorderColor = DarkBorder,
-                        focusedTextColor = TextOnDarkPrimary,
-                        unfocusedTextColor = TextOnDarkPrimary
-                    ),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                )
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(40.dp)
-                ) {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxSize()
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkPrimary)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("PLAN NEW ROUTE", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                        Text("$selectedBarangay • Selected roads: ${selectedGisSegments.size}", fontSize = 10.sp, color = TextOnDarkPrimary)
+                    }
+                    val isRouteSelected = selectedGisSegments.isNotEmpty()
+                    Button(
+                        onClick = {
+                            if (!isRouteSelected) {
+                                Toast.makeText(context, "Please select at least one route corridor / street first.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                showReviewDialog = true
+                            }
+                        },
+                        enabled = isRouteSelected,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EcoGreenPrimary,
+                            disabledContainerColor = DarkSurfaceCard
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        items(filteredBarangays) { bgyName ->
-                            val isSelected = selectedBarangay == bgyName
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = {
-                                    if (selectedBarangay != bgyName) {
-                                        selectedBarangay = bgyName
-                                        selectedRoadSegmentIds = emptyList()
-                                    }
-                                },
-                                label = { Text(bgyName, fontSize = 11.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = EcoGreenContainer,
-                                    selectedLabelColor = EcoGreenLight,
-                                    containerColor = DarkSurface,
-                                    labelColor = TextOnDarkSecondary
-                                )
-                            )
-                        }
+                        Text(
+                            "Finish Route",
+                            color = if (isRouteSelected) Color.Black else TextOnDarkMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
+            }
 
-                if (selectedGisSegments.isNotEmpty()) {
-                    Text("Selected Roads Sequence & Direction (Flip to reverse):", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxWidth().height(42.dp)
+            // Standing Rectangle Map Container Box (matching 3rd pick design)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(230.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(4.dp, DarkBorder, RoundedCornerShape(14.dp))
+            ) {
+                DarkMapView(
+                    modifier = Modifier.fillMaxSize(),
+                    customRoutePoints = routeGeoPoints,
+                    customRouteSegments = routeSegmentsList,
+                    barangayRoads = availableRoads,
+                    selectedRoadIds = selectedRoadSegmentIds,
+                    showDefaultSchedulesWhenEmpty = false
+                )
+            }
+
+            // Bottom Selection Panel with 2 Columns: Barangay Column & Street Column (each with own search & scrollable list)
+            Surface(
+                color = DarkSurfaceCard,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+                border = BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        itemsIndexed(selectedGisSegments) { idx, seg ->
-                            Surface(
-                                color = DarkSurface,
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, EcoGreenPrimary)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Text("Select Route Corridors", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                        Text("Selected: ${selectedRoadSegmentIds.size} roads", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenPrimary)
+                    }
+
+                    if (selectedGisSegments.isNotEmpty()) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            itemsIndexed(selectedGisSegments) { idx, seg ->
+                                Surface(
+                                    color = DarkSurface,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, EcoGreenPrimary)
                                 ) {
-                                    Text("${idx + 1}. ${seg.segmentName.take(16)}...", fontSize = 10.sp, color = TextOnDarkPrimary)
-                                    TextButton(
-                                        onClick = {
-                                            seg.isReversed = !seg.isReversed
-                                            flipStateTrigger++
-                                        },
-                                        contentPadding = PaddingValues(2.dp),
-                                        modifier = Modifier.size(54.dp, 24.dp)
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Text(if (seg.isReversed) "Rev ⇄" else "Fwd ⇄", fontSize = 9.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
+                                        Text("${idx + 1}. ${seg.segmentName.take(14)}...", fontSize = 10.sp, color = TextOnDarkPrimary)
+                                        TextButton(
+                                            onClick = {
+                                                seg.isReversed = !seg.isReversed
+                                                flipStateTrigger++
+                                            },
+                                            contentPadding = PaddingValues(2.dp),
+                                            modifier = Modifier.size(50.dp, 24.dp)
+                                        ) {
+                                            Text(if (seg.isReversed) "Rev ⇄" else "Fwd ⇄", fontSize = 9.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                Text("2. Available Roads in $selectedBarangay (${filteredAvailableRoads.size}):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-
-                OutlinedTextField(
-                    value = roadSearchQuery,
-                    onValueChange = { roadSearchQuery = it },
-                    label = { Text("Search streets in $selectedBarangay...") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EcoGreenPrimary,
-                        unfocusedBorderColor = DarkBorder,
-                        focusedTextColor = TextOnDarkPrimary,
-                        unfocusedTextColor = TextOnDarkPrimary
-                    ),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                )
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
-                        .padding(4.dp)
-                ) {
-                    if (filteredAvailableRoads.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No road segments found in $selectedBarangay.", fontSize = 11.sp, color = TextOnDarkSecondary)
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                    // Two Columns: Left = Barangay, Right = Street
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Left Column: Barangay
+                        Column(
+                            modifier = Modifier
+                                .weight(0.42f)
+                                .fillMaxHeight()
+                                .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
+                                .background(DarkSurface, RoundedCornerShape(10.dp))
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            items(filteredAvailableRoads) { road ->
-                                val isChecked = selectedRoadSegmentIds.contains(road.id)
-                                Card(
-                                    colors = CardDefaults.cardColors(containerColor = if (isChecked) EcoGreenContainer.copy(alpha = 0.4f) else DarkSurface),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            selectedRoadSegmentIds = if (isChecked) selectedRoadSegmentIds - road.id else selectedRoadSegmentIds + road.id
-                                        }
-                                        .border(1.dp, if (isChecked) EcoGreenPrimary else DarkBorder, RoundedCornerShape(8.dp))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(road.segmentName, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                                            Text("Type: ${road.roadType}", fontSize = 9.sp, color = TextOnDarkSecondary)
-                                        }
-                                        Checkbox(
-                                            checked = isChecked,
-                                            onCheckedChange = { checked ->
-                                                selectedRoadSegmentIds = if (checked) selectedRoadSegmentIds + road.id else selectedRoadSegmentIds - road.id
+                            Text("1. Barangay", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            OutlinedTextField(
+                                value = bgySearchQuery,
+                                onValueChange = { bgySearchQuery = it },
+                                placeholder = { Text("Search...", fontSize = 10.sp) },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = EcoGreenPrimary,
+                                    unfocusedBorderColor = DarkBorder,
+                                    focusedTextColor = TextOnDarkPrimary,
+                                    unfocusedTextColor = TextOnDarkPrimary
+                                ),
+                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                            )
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                items(filteredBarangays) { bgyName ->
+                                    val isSelected = selectedBarangay == bgyName
+                                    Surface(
+                                        color = if (isSelected) EcoGreenContainer else DarkSurfaceCard,
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, if (isSelected) EcoGreenPrimary else DarkBorder),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                if (selectedBarangay != bgyName) {
+                                                    selectedBarangay = bgyName
+                                                    selectedRoadSegmentIds = emptyList()
+                                                }
                                             }
+                                    ) {
+                                        Text(
+                                            text = bgyName,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) EcoGreenLight else TextOnDarkPrimary,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                            maxLines = 1
                                         )
                                     }
                                 }
                             }
                         }
+
+                        // Right Column: Street
+                        Column(
+                            modifier = Modifier
+                                .weight(0.58f)
+                                .fillMaxHeight()
+                                .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
+                                .background(DarkSurface, RoundedCornerShape(10.dp))
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("2. Streets (${filteredAvailableRoads.size})", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            OutlinedTextField(
+                                value = roadSearchQuery,
+                                onValueChange = { roadSearchQuery = it },
+                                placeholder = { Text("Search streets...", fontSize = 10.sp) },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = EcoGreenPrimary,
+                                    unfocusedBorderColor = DarkBorder,
+                                    focusedTextColor = TextOnDarkPrimary,
+                                    unfocusedTextColor = TextOnDarkPrimary
+                                ),
+                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                            )
+                            if (filteredAvailableRoads.isEmpty()) {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("No roads found.", fontSize = 10.sp, color = TextOnDarkSecondary)
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    items(filteredAvailableRoads) { road ->
+                                        val isChecked = selectedRoadSegmentIds.contains(road.id)
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = if (isChecked) EcoGreenContainer.copy(alpha = 0.5f) else DarkSurfaceCard),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    selectedRoadSegmentIds = if (isChecked) selectedRoadSegmentIds - road.id else selectedRoadSegmentIds + road.id
+                                                }
+                                                .border(1.dp, if (isChecked) EcoGreenPrimary else DarkBorder, RoundedCornerShape(6.dp))
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(road.segmentName, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, maxLines = 1)
+                                                    Text(road.roadType, fontSize = 9.sp, color = TextOnDarkSecondary, maxLines = 1)
+                                                }
+                                                Checkbox(
+                                                    checked = isChecked,
+                                                    onCheckedChange = { checked ->
+                                                        selectedRoadSegmentIds = if (checked) selectedRoadSegmentIds + road.id else selectedRoadSegmentIds - road.id
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-        }
     }
 
     if (showReviewDialog) {

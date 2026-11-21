@@ -49,6 +49,7 @@ object HakotRepository {
     val today: LocalDate get() = LocalDate.now()
 
     var selectedMapDate: LocalDate by mutableStateOf(LocalDate.now())
+    var selectedFocusSchedule by mutableStateOf<ScheduleItem?>(null)
 
     var currentAdminRole: UserRole by mutableStateOf(UserRole.MUNICIPAL_ADMIN)
     var currentAdminName: String by mutableStateOf("")
@@ -1527,6 +1528,16 @@ object HakotRepository {
             schedules.removeIf { it.id == scheduleId }
         }
         return res.isSuccess
+    }
+
+    fun getDisplayStatus(rawStatus: String): String {
+        return when (rawStatus.lowercase()) {
+            "draft", "assigned", "upcoming" -> "UPCOMING"
+            "active", "onhold", "on_hold" -> "ACTIVE"
+            "missed" -> "MISSED"
+            "completed", "complete", "finished" -> "FINISHED"
+            else -> "UPCOMING"
+        }
     }
 
     val localCompletedDates = mutableSetOf<String>()

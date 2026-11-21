@@ -35,14 +35,23 @@ import com.example.hakot.ui.components.HakotTab
 import com.example.hakot.ui.screens.AdminScreen
 import com.example.hakot.ui.screens.HakotDrawerContent
 import com.example.hakot.ui.screens.HomeScreen
+import com.example.hakot.ui.screens.ReportScreen
 import com.example.hakot.ui.screens.ScheduleScreen
 import com.example.hakot.ui.theme.DarkBackground
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.hakot.ui.theme.HakotTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.navigationBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
         enableEdgeToEdge()
         setContent {
             HakotTheme {
@@ -58,7 +67,6 @@ fun HakotMainApp() {
     var selectedTab by   rememberSaveable { mutableStateOf(HakotTab.MAP) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var isAdminMode by rememberSaveable { mutableStateOf<Boolean>(HakotRepository.isAuthenticated) }
-    var triggerReportDialog by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -98,10 +106,6 @@ fun HakotMainApp() {
                                 when (tab) {
                                     HakotTab.MORE -> {
                                         scope.launch { drawerState.open() }
-                                    }
-                                    HakotTab.REPORT -> {
-                                        selectedTab = HakotTab.MAP
-                                        triggerReportDialog = true
                                     }
                                     else -> {
                                         selectedTab = tab
@@ -151,11 +155,13 @@ fun HakotMainApp() {
                                     searchQuery = searchQuery,
                                     onQueryChange = { searchQuery = it },
                                     onMenuClick = onMenuClick,
-                                    isAdminMode = isAdminMode,
-                                    initialShowReportDialog = triggerReportDialog,
-                                    onReportDialogDismiss = { triggerReportDialog = false }
+                                    isAdminMode = isAdminMode
                                 )
                                 HakotTab.SCHEDULE -> ScheduleScreen(
+                                    searchQuery = searchQuery,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                HakotTab.REPORT -> ReportScreen(
                                     searchQuery = searchQuery,
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -163,9 +169,7 @@ fun HakotMainApp() {
                                     searchQuery = searchQuery,
                                     onQueryChange = { searchQuery = it },
                                     onMenuClick = onMenuClick,
-                                    isAdminMode = isAdminMode,
-                                    initialShowReportDialog = triggerReportDialog,
-                                    onReportDialogDismiss = { triggerReportDialog = false }
+                                    isAdminMode = isAdminMode
                                 )
                             }
                         }

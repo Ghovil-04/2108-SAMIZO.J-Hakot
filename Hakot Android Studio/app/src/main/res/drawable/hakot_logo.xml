@@ -1,58 +1,79 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="256dp"
-    android:height="249dp"
-    android:viewportWidth="778"
-    android:viewportHeight="756">
+    android:width="1536dp"
+    android:height="1536dp"
+    android:viewportWidth="1536"
+    android:viewportHeight="1536">
 
-    <!-- Background -->
-    <path
-        android:fillColor="#F7FAF3"
-        android:pathData="M0,0 H778 V756 H0 Z" />
+    <!-- UNIFORM SCALED & CENTERED LOGO GROUP (Transparent background for in-app splash screen) -->
+    <group
+        android:scaleX="0.75"
+        android:scaleY="0.75"
+        android:translateX="192"
+        android:translateY="384">
 
-    <!-- Main Location Pin -->
-    <path
-        android:fillColor="#064E38"
-        android:fillType="evenOdd"
-        android:pathData="M375,64 C270,64 174,113 117,194 C70,260 59,345 83,410 C105,471 159,522 205,568 L375,731 L545,568 C591,522 645,471 667,410 C691,345 680,260 633,194 C576,113 480,64 375,64 Z M375,127 C511,127 619,220 619,337 C619,379 605,414 590,435 C489,450 365,496 280,577 C209,513 126,432 126,344 C126,224 238,127 375,127 Z" />
+        <!-- TRASHCAN HANDLE -->
+        <path
+            android:fillColor="#005121"
+            android:pathData="M772,112 L783,76 C795,32 832,12 876,21 L1027,49 C1085,59 1115,99 1107,154 L1100,184 L1044,174 L1047,145 C1050,124 1037,113 1016,109 L869,80 C842,75 830,91 826,112 L817,132 Z" />
 
-    <!-- Orange Speed Lines -->
-    <path
-        android:fillColor="#FF851B"
-        android:pathData="M186,281 L295,281 L283,305 L165,305 Z" />
+        <!-- MAIN TRASHCAN BODY -->
+        <path
+            android:fillColor="#005121"
+            android:pathData="M555,225 L1260,353 L1260,389 L1053,918 C1035,968 1010,988 963,982 L670,934 L464,692 L547,294 Z" />
 
-    <path
-        android:fillColor="#FF851B"
-        android:pathData="M201,327 L270,327 L258,350 L181,350 Z" />
+        <!-- TRASHCAN LID TOP -->
+        <path
+            android:fillColor="#005121"
+            android:pathData="M530,171 C552,125 581,99 615,87 C635,80 652,83 675,88 L1037,153 C1105,165 1174,181 1239,199 C1271,208 1287,230 1286,261 L1286,307 C1285,324 1274,329 1259,324 L552,203 C530,199 519,190 530,171 Z" />
 
-    <!-- Delivery Truck -->
-    <path
-        android:fillColor="#064E38"
-        android:pathData="M306,242 L467,241 Q472,241 472,247 L472,366 L485,366 L485,269 Q485,263 492,263 L537,263 Q545,263 550,270 L586,315 Q592,321 592,329 L592,379 Q592,385 585,385 L567,385 C565,364 550,350 532,350 C512,350 498,364 496,385 L374,385 C372,365 356,349 336,349 C316,349 301,365 299,385 L281,385 Q264,385 264,368 L264,361 L315,268 L274,268 Q284,242 306,242 Z" />
+        <!-- WHITE GAP UNDER LID -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="27"
+            android:strokeLineCap="round"
+            android:pathData="M535,201 L1264,354" />
 
-    <!-- Truck Window -->
-    <path
-        android:fillColor="#F7FAF3"
-        android:pathData="M505,283 L536,283 L563,321 L505,321 Z" />
+        <!-- LID LOWER EDGE -->
+        <path
+            android:fillColor="#005121"
+            android:pathData="M536,203 L1258,354 C1272,357 1267,386 1259,398 L1237,400 L535,253 C518,248 517,221 526,207 Q530,200 536,203 Z" />
 
-    <!-- Front Wheel -->
-    <path
-        android:fillColor="#064E38"
-        android:pathData="M531,362 A24,24 0,1 1,531 410 A24,24 0,1 1,531 362 Z" />
+        <!-- ORANGE H LETTER -->
+        <path
+            android:fillColor="#FF7A00"
+            android:pathData="M748,365 L894,367 L847,503 L943,505 L992,368 L1125,373 L1005,746 Q1001,759 986,759 L858,756 L904,615 L808,614 L760,754 L702,753 L638,685 Z" />
 
-    <!-- Rear Wheel -->
-    <path
-        android:fillColor="#064E38"
-        android:pathData="M334,362 A27,27 0,1 1,334 416 A27,27 0,1 1,334 362 Z" />
+        <!-- FIRST SPEED LINE -->
+        <path
+            android:fillColor="#FF7A00"
+            android:pathData="M321,322 C321,309 332,300 350,300 L550,285 L658,301 C675,304 684,313 682,326 C680,342 666,348 651,350 L550,359 L344,353 C329,351 321,339 321,322 Z" />
 
-    <!-- Upper Orange Road -->
-    <path
-        android:fillColor="#FF851B"
-        android:pathData="M205,470 C310,429 434,403 575,425 C449,439 329,470 236,506 Z" />
+        <!-- SECOND SPEED LINE -->
+        <path
+            android:fillColor="#FF7A00"
+            android:pathData="M218,432 C218,416 232,406 250,405 L520,391 L620,405 C642,408 655,418 654,434 C653,449 637,456 619,458 L520,464 L246,460 C229,458 218,448 218,432 Z" />
 
-    <!-- Lower Orange Road -->
-    <path
-        android:fillColor="#FF851B"
-        android:pathData="M248,518 C343,469 455,441 575,425 C468,456 365,497 283,552 Z" />
+        <!-- THIRD SPEED LINE -->
+        <path
+            android:fillColor="#FF7A00"
+            android:pathData="M199,546 C199,530 213,520 232,518 L490,498 L598,511 C619,514 632,526 631,543 C630,560 615,567 596,570 L491,580 L225,573 C209,570 199,560 199,546 Z" />
+
+        <!-- WHITE WHEEL OUTER BORDER -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M545,840 m-165,0 a165,165 0,1 1,330 0 a165,165 0,1 1,-330 0" />
+
+        <!-- GREEN WHEEL -->
+        <path
+            android:fillColor="#005121"
+            android:pathData="M530,841 m-138,0 a138,138 0,1 1,276 0 a138,138 0,1 1,-276 0" />
+
+        <!-- WHITE WHEEL CENTER -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M529,840 m-60,0 a60,60 0,1 1,120 0 a60,60 0,1 1,-120 0" />
+
+    </group>
 
 </vector>

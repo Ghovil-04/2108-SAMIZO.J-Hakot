@@ -74,8 +74,8 @@ fun TopSearchBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp)
-                .height(42.dp),
+                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp)
+                .height(38.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Official Hakot Logo on Left
@@ -89,12 +89,12 @@ fun TopSearchBar(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Search Bar Input Field in sleek slim container
+            // Search Bar Input Field in sleek shorter container
             Surface(
                 modifier = Modifier
                     .weight(1f)
-                    .height(36.dp),
-                shape = RoundedCornerShape(18.dp),
+                    .height(32.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = DarkSurfaceCard,
                 border = BorderStroke(1.dp, DarkBorder)
             ) {
@@ -113,7 +113,7 @@ fun TopSearchBar(
                                 text = if (isAdminMode) "Search routes, trucks..." else "Search collection route or dumpsite...",
                                 style = TextStyle(
                                     color = TextOnDarkMuted,
-                                    fontSize = 12.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Normal
                                 ),
                                 maxLines = 1
@@ -128,7 +128,7 @@ fun TopSearchBar(
                             singleLine = true,
                             textStyle = TextStyle(
                                 color = TextOnDarkPrimary,
-                                fontSize = 12.sp,
+                                fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Medium
                             ),
                             cursorBrush = SolidColor(EcoGreenPrimary),
@@ -142,13 +142,13 @@ fun TopSearchBar(
                                 onQueryChange("")
                                 isSuggestionsVisible = false
                             },
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Clear",
                                 tint = TextOnDarkSecondary,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                         }
                     } else {
@@ -164,15 +164,15 @@ fun TopSearchBar(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Clickable Notification Bell Icon on Right
+            // Clickable Notification Bell Icon on Right (Consistent with other top icons)
             IconButton(
                 onClick = onNotificationClick,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Notifications,
                     contentDescription = "Notifications",
-                    tint = if (isAdminMode) EcoGreenPrimary else TextOnDarkPrimary,
+                    tint = TextOnDarkSecondary,
                     modifier = Modifier.size(20.dp)
                 )
             }
