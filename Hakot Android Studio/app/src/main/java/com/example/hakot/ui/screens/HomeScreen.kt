@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -46,7 +47,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -87,11 +90,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hakot.data.HakotRepository
+import com.example.hakot.data.HakotRepository.MunicipalityItem
 import com.example.hakot.model.ReportType
 import com.example.hakot.model.ScheduleItem
 import com.example.hakot.model.WasteCategory
 import com.example.hakot.ui.components.DarkMapView
 import com.example.hakot.ui.components.TopSearchBar
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.example.hakot.ui.theme.DarkBackground
 import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurface
 import com.example.hakot.ui.theme.DarkSurfaceCard
@@ -799,6 +806,164 @@ fun EmptyCollectionStatusCard(modifier: Modifier = Modifier) {
                 color = TextOnDarkSecondary,
                 textAlign = TextAlign.Center
             )
+        }
+    }
+}
+
+@Composable
+fun MunicipalitySelectionModal(
+    onDismiss: () -> Unit,
+    onMunicipalitySelected: (id: String, name: String) -> Unit
+) {
+    val context = LocalContext.current
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedItem by remember { mutableStateOf<MunicipalityItem?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        isLoading = true
+        HakotRepository.fetchMunicipalitiesFromSupabase(context)
+        isLoading = false
+    }
+
+    val filteredList = remember(searchQuery, HakotRepository.municipalities.size) {
+        if (searchQuery.isBlank()) HakotRepository.municipalities
+        else HakotRepository.municipalities.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+            it.province.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            color = DarkBackground,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.92f)
+                        .border(1.dp, DarkBorder, RoundedCornerShape(20.dp))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(20.dp)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Select Your Municipality",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = EcoGreenLight
+                        )
+                        Text(
+                            text = "Choose your municipality to access the correct waste collection schedules, announcements, and local reports.",
+                            fontSize = 11.5.sp,
+                            color = TextOnDarkSecondary
+                        )
+
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search your municipality...", fontSize = 12.sp, color = TextOnDarkMuted) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = EcoGreenPrimary,
+                                unfocusedBorderColor = DarkBorder,
+                                focusedTextColor = TextOnDarkPrimary,
+                                unfocusedTextColor = TextOnDarkPrimary
+                            ),
+                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                        )
+
+                        if (isLoading) {
+                            Box(modifier = Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = EcoGreenPrimary, modifier = Modifier.size(28.dp))
+                            }
+                        } else if (filteredList.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "No municipality found matching \"$searchQuery\".",
+                                    fontSize = 12.sp,
+                                    color = TextOnDarkSecondary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(220.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(filteredList) { item ->
+                                    val isSelected = selectedItem?.id == item.id || (selectedItem == null && HakotRepository.activeOrganization.municipalityId == item.id)
+                                    Surface(
+                                        color = if (isSelected) EcoGreenContainer else DarkSurface,
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, if (isSelected) EcoGreenPrimary else DarkBorder),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { selectedItem = item }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column {
+                                                Text(
+                                                    text = item.name,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (isSelected) EcoGreenLight else TextOnDarkPrimary
+                                                )
+                                                Text(
+                                                    text = "${item.province}, ${item.region}",
+                                                    fontSize = 10.sp,
+                                                    color = TextOnDarkSecondary
+                                                )
+                                            }
+                                            if (isSelected) {
+                                                Text("Selected ✓", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                val itemToSave = selectedItem ?: filteredList.firstOrNull()
+                                if (itemToSave != null) {
+                                    onMunicipalitySelected(itemToSave.id, itemToSave.name)
+                                    onDismiss()
+                                }
+                            },
+                            enabled = selectedItem != null || filteredList.isNotEmpty(),
+                            colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                        ) {
+                            Text("Continue", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
         }
     }
 }

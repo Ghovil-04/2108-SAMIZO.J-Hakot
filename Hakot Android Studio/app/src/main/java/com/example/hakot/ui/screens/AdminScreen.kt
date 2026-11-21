@@ -92,6 +92,8 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Mail
@@ -108,6 +110,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -142,6 +145,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -156,6 +160,7 @@ import com.example.hakot.model.AdminUserProfile
 import com.example.hakot.model.AnonymousReport
 import com.example.hakot.model.ApplicationStatus
 import com.example.hakot.model.ReportStatus
+import com.example.hakot.model.TruckerAccount
 import com.example.hakot.model.UserRole
 import com.example.hakot.ui.theme.DarkBackground
 import com.example.hakot.ui.theme.DarkBorder
@@ -166,6 +171,7 @@ import com.example.hakot.ui.theme.EcoGreenContainer
 import com.example.hakot.ui.theme.EcoGreenLight
 import com.example.hakot.ui.theme.EcoGreenPrimary
 import com.example.hakot.ui.theme.HazardousRed
+import com.example.hakot.ui.theme.SafetyOrange
 import com.example.hakot.ui.theme.RecycleYellow
 import com.example.hakot.ui.theme.TextOnDarkMuted
 import com.example.hakot.ui.theme.TextOnDarkPrimary
@@ -176,8 +182,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.time.DayOfWeek
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
@@ -1816,13 +1824,25 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                         val truckText = if (isUnassigned) "No assigned truck yet" else sch.truckAssigned
                         Text("Assigned Truck: $truckText", fontSize = 10.sp, color = TextOnDarkSecondary)
 
+                        val assignedDriverName = if (sch.truckAssigned.contains("Driver:", ignoreCase = true)) {
+                            sch.truckAssigned.substringAfter("Driver:").trim()
+                        } else ""
+
+                        val isAssignedToSomeoneElse = assignedDriverName.isNotBlank() &&
+                            !assignedDriverName.equals("Unassigned", ignoreCase = true) &&
+                            !assignedDriverName.equals("No assigned", ignoreCase = true) &&
+                            driver?.fullName != null &&
+                            !assignedDriverName.equals(driver.fullName, ignoreCase = true)
+
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isUnassigned || sch.status.equals("DRAFT", ignoreCase = true)) {
+                            if (isAssignedToSomeoneElse) {
+                                Text("Assigned to $assignedDriverName", fontSize = 10.sp, color = RecycleYellow, fontWeight = FontWeight.Bold)
+                            } else if (isUnassigned || sch.status.equals("DRAFT", ignoreCase = true)) {
                                 // Assign Myself Button (DRAFT -> ASSIGNED or Clone Instance for Weekly)
                                 Button(
                                     onClick = {
@@ -4780,19 +4800,33 @@ fun PlanScheduleDialog(
 fun AdminTrucksView() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var fleetSubTab by remember { mutableIntStateOf(0) } // 0 = Trucks, 1 = Truckers
+
     var showAddTruckDialog by remember { mutableStateOf(false) }
+    var showAddTruckerDialog by remember { mutableStateOf(false) }
     var successMsg by remember { mutableStateOf<String?>(null) }
 
+    // Truck inputs (2 fields)
     var truckCodeInput by remember { mutableStateOf("Hakot Truck #${HakotRepository.trucks.size + 1}") }
     var plateNumberInput by remember { mutableStateOf("XYZ-${(1000..9999).random()}") }
-    var driverNameInput by remember { mutableStateOf("") }
-    var assignedRouteInput by remember { mutableStateOf("Nasugbu Main Route") }
-    var destinationInput by remember { mutableStateOf("Nasugbu MRF Facility") }
+
+    // Trucker account inputs (3 fields)
+    var truckerFullNameInput by remember { mutableStateOf("") }
+    var truckerUsernameInput by remember { mutableStateOf("") }
+    var truckerPasswordInput by remember { mutableStateOf("") }
 
     var selectedTruckForDelete by remember { mutableStateOf<Dumptrack?>(null) }
+    var selectedTruckerForDelete by remember { mutableStateOf<TruckerAccount?>(null) }
+
+    val municipalitySlug = HakotRepository.activeOrganization.assignedMunicipality
+        .lowercase()
+        .replace(" ", "")
+        .replace(Regex("[^a-z0-9]"), "")
+        .ifBlank { "nasugbu" }
 
     LaunchedEffect(Unit) {
         HakotRepository.fetchTrucksFromSupabase(context)
+        HakotRepository.fetchTruckerAccountsFromSupabase(context)
     }
 
     Column(
@@ -4804,17 +4838,65 @@ fun AdminTrucksView() {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text("Fleet Trucks Management", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                Text("Manage municipal collection trucks & drivers", fontSize = 11.sp, color = TextOnDarkSecondary)
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Fleet & Drivers Management", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                Text("Manage municipal collection trucks and trucker accounts", fontSize = 11.sp, color = TextOnDarkSecondary)
+            }
+            if (fleetSubTab == 0) {
+                Button(
+                    onClick = { showAddTruckDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Add New Truck", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Button(
+                    onClick = { showAddTruckerDialog = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Add New Driver Account", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Sub-tabs row (Trucks vs Truckers)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = { fleetSubTab = 0 },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (fleetSubTab == 0) EcoGreenPrimary else DarkSurfaceCard
+                ),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    "🚛 Trucks (${HakotRepository.trucks.size})",
+                    color = if (fleetSubTab == 0) Color.Black else TextOnDarkPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
             Button(
-                onClick = { showAddTruckDialog = true },
-                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                onClick = { fleetSubTab = 1 },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (fleetSubTab == 1) EcoGreenPrimary else DarkSurfaceCard
+                ),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.weight(1f)
             ) {
-                Text("Add New Truck", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "👤 Truckers (${HakotRepository.truckerAccounts.size})",
+                    color = if (fleetSubTab == 1) Color.Black else TextOnDarkPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
 
@@ -4828,65 +4910,133 @@ fun AdminTrucksView() {
             }
         }
 
-        if (HakotRepository.trucks.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No fleet trucks registered yet. Click 'Add New Truck' to add one.", fontSize = 12.sp, color = TextOnDarkSecondary)
-            }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(bottom = 20.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(HakotRepository.trucks) { tr ->
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "${tr.truckCode} (${tr.plateNumber})",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextOnDarkPrimary
-                                )
-                                Surface(
-                                    color = EcoGreenContainer,
-                                    shape = RoundedCornerShape(6.dp),
-                                    border = BorderStroke(1.dp, EcoGreenPrimary)
+        if (fleetSubTab == 0) {
+            // Trucks List
+            if (HakotRepository.trucks.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No fleet trucks registered yet. Click 'Add New Truck' to add one.", fontSize = 12.sp, color = TextOnDarkSecondary)
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 20.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(HakotRepository.trucks) { tr ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "Active",
-                                        fontSize = 10.sp,
+                                        text = "${tr.truckCode} (${tr.plateNumber})",
+                                        fontSize = 15.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = EcoGreenLight,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        color = TextOnDarkPrimary
                                     )
+                                    Surface(
+                                        color = EcoGreenContainer,
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, EcoGreenPrimary)
+                                    ) {
+                                        Text(
+                                            text = "Active",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = EcoGreenLight,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Plate: ${tr.plateNumber} | Code: ${tr.truckCode}", fontSize = 12.sp, color = TextOnDarkSecondary)
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(
+                                        onClick = { selectedTruckForDelete = tr }
+                                    ) {
+                                        Text("Delete Truck ✕", fontSize = 10.sp, color = HazardousRed, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("👤 Driver: ${tr.driverName}", fontSize = 12.sp, color = EcoGreenLight)
-
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                TextButton(
-                                    onClick = { selectedTruckForDelete = tr }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Truckers List
+            if (HakotRepository.truckerAccounts.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No driver accounts registered yet. Click 'Add New Driver Account' to add one.", fontSize = 12.sp, color = TextOnDarkSecondary)
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 20.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(HakotRepository.truckerAccounts) { acc ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Delete Truck ✕", fontSize = 10.sp, color = HazardousRed, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = acc.fullName,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextOnDarkPrimary
+                                    )
+                                    Surface(
+                                        color = EcoGreenContainer,
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, EcoGreenPrimary)
+                                    ) {
+                                        Text(
+                                            text = acc.role.uppercase(),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = EcoGreenLight,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("📧 Email: ${acc.email}", fontSize = 12.sp, color = EcoGreenLight)
+                                Text("👤 Username: ${acc.username}", fontSize = 11.sp, color = TextOnDarkSecondary)
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(
+                                        onClick = { selectedTruckerForDelete = acc }
+                                    ) {
+                                        Text("Delete Driver ✕", fontSize = 10.sp, color = HazardousRed, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
@@ -4896,6 +5046,7 @@ fun AdminTrucksView() {
         }
     }
 
+    // Delete Truck Dialog
     if (selectedTruckForDelete != null) {
         val trToDelete = selectedTruckForDelete!!
         AlertDialog(
@@ -4944,6 +5095,55 @@ fun AdminTrucksView() {
         )
     }
 
+    // Delete Trucker Account Dialog
+    if (selectedTruckerForDelete != null) {
+        val accToDelete = selectedTruckerForDelete!!
+        AlertDialog(
+            onDismissRequest = { selectedTruckerForDelete = null },
+            containerColor = DarkSurfaceCard,
+            title = {
+                Text(
+                    text = "Confirm Driver Account Deletion",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = HazardousRed
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to delete driver account '${accToDelete.fullName}' (${accToDelete.email})?\n\nThis action cannot be undone.",
+                    fontSize = 12.sp,
+                    color = TextOnDarkSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val success = HakotRepository.deleteTruckerAccountFromSupabase(accToDelete.id, context)
+                            if (success) {
+                                Toast.makeText(context, "Driver account deleted successfully.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Error deleting driver account", Toast.LENGTH_SHORT).show()
+                            }
+                            selectedTruckerForDelete = null
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Yes, Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedTruckerForDelete = null }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            }
+        )
+    }
+
+    // Add New Truck Dialog (2 fields asked: truck name or code, plate number)
     if (showAddTruckDialog) {
         AlertDialog(
             onDismissRequest = { showAddTruckDialog = false },
@@ -4956,7 +5156,7 @@ fun AdminTrucksView() {
                     OutlinedTextField(
                         value = truckCodeInput,
                         onValueChange = { truckCodeInput = it },
-                        label = { Text("Truck Code / Name (e.g. Hakot #4)") },
+                        label = { Text("Truck Name or Code (e.g. Hakot #4)") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = EcoGreenPrimary,
@@ -4979,31 +5179,18 @@ fun AdminTrucksView() {
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    OutlinedTextField(
-                        value = driverNameInput,
-                        onValueChange = { driverNameInput = it },
-                        label = { Text("Assigned Driver Name") },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = EcoGreenPrimary,
-                            unfocusedBorderColor = DarkBorder,
-                            focusedTextColor = TextOnDarkPrimary,
-                            unfocusedTextColor = TextOnDarkPrimary
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (plateNumberInput.isNotBlank() && driverNameInput.isNotBlank()) {
+                        if (plateNumberInput.isNotBlank() && truckCodeInput.isNotBlank()) {
                             scope.launch {
                                 val newTruck = Dumptrack(
                                     id = UUID.randomUUID().toString(),
-                                    truckCode = truckCodeInput.trim().ifBlank { "Hakot Truck" },
+                                    truckCode = truckCodeInput.trim(),
                                     plateNumber = plateNumberInput.trim(),
-                                    driverName = driverNameInput.trim(),
+                                    driverName = "Unassigned Driver",
                                     assignedRoute = "Collection Route",
                                     destinationDumpsite = "Nasugbu MRF Facility",
                                     latitude = 14.0725,
@@ -5011,7 +5198,7 @@ fun AdminTrucksView() {
                                 )
                                 val res = HakotRepository.saveTruckToSupabase(newTruck, context)
                                 if (res.first) {
-                                    successMsg = "Successfully registered truck '${newTruck.truckCode}' to Supabase!"
+                                    successMsg = "Successfully registered truck '${newTruck.truckCode}'!"
                                     Toast.makeText(context, "Truck saved successfully to database!", Toast.LENGTH_SHORT).show()
                                     showAddTruckDialog = false
                                 } else {
@@ -5034,6 +5221,111 @@ fun AdminTrucksView() {
             containerColor = DarkSurfaceCard
         )
     }
+
+    // Add New Driver Account Dialog (3 fields asked: Full name, name with .{municipality}@hakot.driver.ph, password)
+    if (showAddTruckerDialog) {
+        val generatedEmail = if (truckerUsernameInput.isNotBlank()) {
+            "${truckerUsernameInput.trim().lowercase().replace(" ", "")}.$municipalitySlug@hakot.driver.ph"
+        } else {
+            "name.$municipalitySlug@hakot.driver.ph"
+        }
+
+        AlertDialog(
+            onDismissRequest = { showAddTruckerDialog = false },
+            title = { Text("Register New Driver Account", color = TextOnDarkPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = truckerFullNameInput,
+                        onValueChange = { truckerFullNameInput = it },
+                        label = { Text("Full Name (e.g. Juan Dela Cruz)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = truckerUsernameInput,
+                        onValueChange = { truckerUsernameInput = it },
+                        label = { Text("Name / Username (e.g. juan)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = "Generated Email/Username: $generatedEmail",
+                        fontSize = 11.sp,
+                        color = EcoGreenLight
+                    )
+                    OutlinedTextField(
+                        value = truckerPasswordInput,
+                        onValueChange = { truckerPasswordInput = it },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (truckerFullNameInput.isNotBlank() && truckerUsernameInput.isNotBlank() && truckerPasswordInput.isNotBlank()) {
+                            scope.launch {
+                                val newAccount = TruckerAccount(
+                                    id = UUID.randomUUID().toString(),
+                                    municipalityId = HakotRepository.activeOrganization.municipalityId,
+                                    truckId = null,
+                                    fullName = truckerFullNameInput.trim(),
+                                    username = truckerUsernameInput.trim().lowercase().replace(" ", ""),
+                                    email = generatedEmail,
+                                    password = truckerPasswordInput.trim(),
+                                    role = "driver",
+                                    status = "active"
+                                )
+                                val res = HakotRepository.saveTruckerAccountToSupabase(newAccount, context)
+                                if (res.first) {
+                                    successMsg = "Successfully registered driver account '${newAccount.fullName}'!"
+                                    Toast.makeText(context, "Driver account saved successfully!", Toast.LENGTH_SHORT).show()
+                                    showAddTruckerDialog = false
+                                } else {
+                                    successMsg = "Error saving driver account: ${res.second}"
+                                    Toast.makeText(context, "Error: ${res.second}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Save to Database", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddTruckerDialog = false }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            },
+            containerColor = DarkSurfaceCard
+        )
+    }
 }
 
 
@@ -5042,7 +5334,8 @@ fun AdminTrucksView() {
 fun AdminReportsView() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var selectedReportForChat by remember { mutableStateOf<AnonymousReport?>(null) }
+    var selectedReportForDetail by remember { mutableStateOf<AnonymousReport?>(null) }
+    var selectedStatusFilter by remember { mutableStateOf("ALL") }
     val assignedMunicipality = HakotRepository.activeOrganization.assignedMunicipality
 
     LaunchedEffect(Unit) {
@@ -5050,133 +5343,182 @@ fun AdminReportsView() {
     }
 
     val municipalityReports = HakotRepository.reports.filter { rep ->
-        assignedMunicipality.isBlank() ||
-        rep.locationName.contains(assignedMunicipality, ignoreCase = true) ||
-        rep.description.contains(assignedMunicipality, ignoreCase = true)
+        val matchesMunicipality = assignedMunicipality.isBlank() ||
+            rep.locationName.contains(assignedMunicipality, ignoreCase = true) ||
+            rep.description.contains(assignedMunicipality, ignoreCase = true)
+
+        val matchesStatus = when (selectedStatusFilter) {
+            "PENDING" -> rep.status == ReportStatus.SUBMITTED || rep.status == ReportStatus.RECEIVED
+            "UNDER_REVIEW" -> rep.status == ReportStatus.UNDER_REVIEW
+            "RESOLVED" -> rep.status == ReportStatus.RESOLVED
+            "REJECTED" -> rep.status == ReportStatus.REJECTED
+            else -> true
+        }
+
+        matchesMunicipality && matchesStatus
     }
 
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 20.dp)
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        item {
-            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                Text("Citizen Waste Reports", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                Text("Review and resolve waste collection reports submitted by citizens", fontSize = 11.sp, color = TextOnDarkSecondary)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text("Citizen Waste Reports Management", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+            Text("Assigned Scope: ${assignedMunicipality.ifBlank { "All Municipalities" }}", fontSize = 11.sp, color = TextOnDarkSecondary)
+        }
+
+        // Status Filter Chips
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            val statusFilters = listOf("ALL" to "All", "PENDING" to "Pending", "UNDER_REVIEW" to "Under Review", "RESOLVED" to "Resolved", "REJECTED" to "Rejected")
+            statusFilters.forEach { (key, label) ->
+                val isSelected = selectedStatusFilter == key
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { selectedStatusFilter = key },
+                    label = { Text(label, fontSize = 10.5.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = EcoGreenContainer,
+                        selectedLabelColor = EcoGreenLight,
+                        containerColor = DarkSurfaceCard,
+                        labelColor = TextOnDarkSecondary
+                    ),
+                    modifier = Modifier.height(32.dp)
+                )
             }
         }
 
         if (municipalityReports.isEmpty()) {
-            item {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
-                    contentAlignment = Alignment.Center
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 30.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
                 ) {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth().border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(28.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "Reports list is empty.",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextOnDarkPrimary
-                            )
-                            Text(
-                                text = "No citizen waste reports found for your municipality.",
-                                fontSize = 11.sp,
-                                color = TextOnDarkSecondary,
-                                textAlign = TextAlign.Center
-                            )
-                        }
+                        Text(
+                            text = "No reports found.",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnDarkPrimary
+                        )
+                        Text(
+                            text = "No citizen reports matching filter for ${assignedMunicipality.ifBlank { "your municipality" }}.",
+                            fontSize = 11.sp,
+                            color = TextOnDarkSecondary,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }
         } else {
-            items(municipalityReports) { rep ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { selectedReportForChat = rep }
-                        .border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 20.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(municipalityReports) { rep ->
+                    val statusColor = when (rep.status) {
+                        ReportStatus.RESOLVED -> EcoGreenPrimary
+                        ReportStatus.REJECTED -> HazardousRed
+                        ReportStatus.UNDER_REVIEW -> SafetyOrange
+                        else -> RecycleYellow
+                    }
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedReportForDetail = rep }
+                            .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = rep.reportType.title,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextOnDarkPrimary
+                                    )
+                                    Text(
+                                        text = "Ref: ${rep.referenceNumber}",
+                                        fontSize = 9.5.sp,
+                                        color = TextOnDarkMuted
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(statusColor.copy(alpha = 0.2f))
+                                        .border(1.dp, statusColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text(rep.status.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = statusColor)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Text(
+                                text = "📍 ${rep.locationName}",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = EcoGreenLight
+                            )
+                            if (rep.description.isNotBlank()) {
                                 Text(
-                                    text = rep.referenceNumber,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = EcoGreenLight
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = rep.reportType.title,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = HazardousRed
+                                    text = rep.description,
+                                    fontSize = 11.sp,
+                                    color = TextOnDarkSecondary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
 
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(EcoGreenContainer)
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(rep.status.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                            }
-                        }
+                                val timeFormatted = try {
+                                    val instant = Instant.ofEpochMilli(rep.timestampMillis)
+                                    val zdt = ZonedDateTime.ofInstant(instant, ZoneId.systemDefault())
+                                    zdt.format(DateTimeFormatter.ofPattern("MMM dd, yyyy • hh:mm a"))
+                                } catch (e: Exception) {
+                                    "Submitted recently"
+                                }
+                                Text(text = timeFormatted, fontSize = 9.5.sp, color = TextOnDarkMuted)
 
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = "📍 ${rep.locationName}",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = TextOnDarkPrimary
-                        )
-                        Text(
-                            text = rep.description,
-                            fontSize = 11.sp,
-                            color = TextOnDarkSecondary
-                        )
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        val success = HakotRepository.resolveCitizenReport(rep.id, context)
-                                        if (success) {
-                                            Toast.makeText(context, "Report resolved & deleted successfully.", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "Error resolving report", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                modifier = Modifier.height(30.dp)
-                            ) {
-                                Text("Resolve", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                Button(
+                                    onClick = { selectedReportForDetail = rep },
+                                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, DarkBorder),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Text("View Details & Status →", fontSize = 10.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -5184,6 +5526,147 @@ fun AdminReportsView() {
             }
         }
     }
+
+    selectedReportForDetail?.let { rep ->
+        AdminReportDetailDialog(
+            report = rep,
+            onDismiss = { selectedReportForDetail = null },
+            onStatusUpdated = { newStatus ->
+                scope.launch {
+                    HakotRepository.updateReportStatus(rep.id, newStatus, "")
+                    selectedReportForDetail = null
+                    Toast.makeText(context, "Report status updated to ${newStatus.label}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun AdminReportDetailDialog(
+    report: AnonymousReport,
+    onDismiss: () -> Unit,
+    onStatusUpdated: (ReportStatus) -> Unit
+) {
+    var isDropdownExpanded by remember { mutableStateOf(false) }
+    var currentStatus by remember { mutableStateOf(report.status) }
+
+    val statusOptions = listOf(
+        ReportStatus.SUBMITTED to "Pending",
+        ReportStatus.UNDER_REVIEW to "Under Review",
+        ReportStatus.RESOLVED to "Resolved",
+        ReportStatus.REJECTED to "Rejected"
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurfaceCard,
+        shape = RoundedCornerShape(18.dp),
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Report Details", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                    Text("Ref: ${report.referenceNumber}", fontSize = 10.sp, color = TextOnDarkMuted)
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp)) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = TextOnDarkPrimary)
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Report Type
+                Column {
+                    Text("Report Type", fontSize = 10.sp, color = TextOnDarkSecondary)
+                    Text(report.reportType.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                }
+
+                HorizontalDivider(color = DarkBorder)
+
+                // Location / Street
+                Column {
+                    Text("Location / Street / Barangay", fontSize = 10.sp, color = TextOnDarkSecondary)
+                    Text(report.locationName, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = EcoGreenLight)
+                }
+
+                // Description
+                Column {
+                    Text("Problem Description / Notes", fontSize = 10.sp, color = TextOnDarkSecondary)
+                    Text(report.description.ifBlank { "No additional details provided." }, fontSize = 11.5.sp, color = TextOnDarkPrimary)
+                }
+
+                // Date & Time
+                Column {
+                    Text("Submitted Date & Time", fontSize = 10.sp, color = TextOnDarkSecondary)
+                    val timeFormatted = try {
+                        val instant = Instant.ofEpochMilli(report.timestampMillis)
+                        val zdt = ZonedDateTime.ofInstant(instant, ZoneId.systemDefault())
+                        zdt.format(DateTimeFormatter.ofPattern("EEEE, MMMM dd, yyyy • hh:mm:ss a"))
+                    } catch (e: Exception) {
+                        "Submitted recently"
+                    }
+                    Text(timeFormatted, fontSize = 11.5.sp, color = TextOnDarkPrimary)
+                }
+
+                HorizontalDivider(color = DarkBorder)
+
+                // Change Report Status
+                Text("Manage Report Status:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Surface(
+                        onClick = { isDropdownExpanded = !isDropdownExpanded },
+                        color = DarkSurface,
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, EcoGreenPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Status: ${statusOptions.find { it.first == currentStatus }?.second ?: currentStatus.label}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EcoGreenPrimary)
+                            Icon(imageVector = if (isDropdownExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = "Dropdown", tint = EcoGreenLight, modifier = Modifier.size(18.dp))
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = isDropdownExpanded,
+                        onDismissRequest = { isDropdownExpanded = false },
+                        modifier = Modifier.fillMaxWidth(0.85f).background(DarkSurfaceCard)
+                    ) {
+                        statusOptions.forEach { (st, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label, fontSize = 12.sp, fontWeight = if (st == currentStatus) FontWeight.Bold else FontWeight.Medium, color = if (st == currentStatus) EcoGreenLight else TextOnDarkPrimary) },
+                                onClick = {
+                                    currentStatus = st
+                                    isDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onStatusUpdated(currentStatus) },
+                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                Text("Save Status", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        }
+    )
 }
 
 

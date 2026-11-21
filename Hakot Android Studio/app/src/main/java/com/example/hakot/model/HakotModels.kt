@@ -406,3 +406,17 @@ data class PasswordResetRequest(
         }
 }
 
+data class TruckerAccount(
+    val id: String,
+    val municipalityId: String,
+    val truckId: String?,
+    val fullName: String,
+    val username: String,
+    val email: String,
+    val password: String,
+    val role: String = "driver",
+    val status: String = "active",
+    val createdAt: String? = null
+)
+
+

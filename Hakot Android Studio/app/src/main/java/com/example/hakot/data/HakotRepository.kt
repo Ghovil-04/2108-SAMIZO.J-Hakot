@@ -28,6 +28,7 @@ import com.example.hakot.model.ReportStatus
 import com.example.hakot.model.ReportType
 import com.example.hakot.model.ScheduleItem
 import com.example.hakot.model.TruckStatus
+import com.example.hakot.model.TruckerAccount
 import com.example.hakot.model.UserRole
 import com.example.hakot.model.WasteCategory
 import kotlinx.coroutines.CoroutineScope
@@ -172,6 +173,7 @@ object HakotRepository {
     )
 
     val trucks = mutableStateListOf<GarbageTruck>()
+    val truckerAccounts = mutableStateListOf<TruckerAccount>()
 
     val routes = mutableStateListOf<CollectionRoute>(
         CollectionRoute(
@@ -1358,6 +1360,80 @@ object HakotRepository {
         return false
     }
 
+    suspend fun fetchTruckerAccountsFromSupabase(context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: return false
+        val fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucker_accounts?municipality_id=eq.${activeOrganization.municipalityId}", token)
+        if (fetchRes.isSuccess && fetchRes.data != null) {
+            try {
+                val array = fetchRes.data
+                val list = mutableListOf<TruckerAccount>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    list.add(
+                        TruckerAccount(
+                            id = obj.optString("id", UUID.randomUUID().toString()),
+                            municipalityId = obj.optString("municipality_id", activeOrganization.municipalityId),
+                            truckId = obj.optString("truck_id").takeIf { it.isNotBlank() && it != "null" },
+                            fullName = obj.optString("full_name", ""),
+                            username = obj.optString("username", ""),
+                            email = obj.optString("email", ""),
+                            password = obj.optString("password", ""),
+                            role = obj.optString("role", "driver"),
+                            status = obj.optString("status", "active"),
+                            createdAt = obj.optString("created_at", "")
+                        )
+                    )
+                }
+                truckerAccounts.clear()
+                truckerAccounts.addAll(list)
+                return true
+            } catch (e: Exception) {
+                Log.e("HAKOT_REPO", "Error parsing trucker accounts from Supabase", e)
+            }
+        }
+        return false
+    }
+
+    suspend fun saveTruckerAccountToSupabase(account: TruckerAccount, context: Context): Pair<Boolean, String> {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        if (token.isBlank()) {
+            return Pair(false, "Authentication error: Active admin session required.")
+        }
+
+        val payload = JSONObject().apply {
+            put("id", account.id)
+            put("municipality_id", activeOrganization.municipalityId)
+            put("full_name", account.fullName)
+            put("username", account.username)
+            put("email", account.email)
+            put("password", account.password)
+            put("role", account.role)
+            put("status", account.status)
+        }
+
+        val res = SupabaseClient.insertAuthenticatedTableRecord("trucker_accounts", payload, token)
+        if (res.isSuccess) {
+            if (!truckerAccounts.any { it.id == account.id }) {
+                truckerAccounts.add(account)
+            }
+            logAuditAction(context, "Created trucker account '${account.fullName}' (${account.email})", "Truckers")
+            return Pair(true, "Successfully saved trucker account to Supabase.")
+        } else {
+            return Pair(false, "Supabase Trucker Error: ${res.errorMessage}")
+        }
+    }
+
+    suspend fun deleteTruckerAccountFromSupabase(accountId: String, context: Context): Boolean {
+        val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val res = SupabaseClient.deleteTableRecord("trucker_accounts", "id=eq.$accountId", token)
+        if (res.isSuccess) {
+            truckerAccounts.removeIf { it.id == accountId }
+            logAuditAction(context, "Deleted trucker account ID: $accountId", "Truckers")
+            return true
+        }
+        return false
+    }
+
     suspend fun resolveCitizenReport(reportId: String, context: Context): Boolean {
         val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
         val res = SupabaseClient.deleteTableRecord("waste_reports", "id=eq.$reportId", token)
@@ -1529,6 +1605,132 @@ object HakotRepository {
         }
         return res.isSuccess
     }
+
+data class MunicipalityItem(
+    val id: String,
+    val name: String,
+    val province: String = "Batangas",
+    val region: String = "CALABARZON",
+    val centerLat: Double = 14.0700,
+    val centerLng: Double = 120.6300
+)
+
+val municipalities = mutableStateListOf(
+    MunicipalityItem(
+        id = "cb394eb7-a8b7-45f2-a314-3926baeab31f",
+        name = "Nasugbu, Batangas",
+        province = "Batangas",
+        region = "CALABARZON",
+        centerLat = 14.0700,
+        centerLng = 120.6300
+    )
+)
+var selectedMunicipalityId by mutableStateOf<String?>(null)
+var selectedMunicipalityName by mutableStateOf<String?>(null)
+
+fun getSavedMunicipalityId(context: Context): String? {
+    val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+    return prefs.getString("selected_municipality_id", null)
+}
+
+fun getSavedMunicipalityName(context: Context): String? {
+    val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+    return prefs.getString("selected_municipality_name", null)
+}
+
+fun saveSelectedMunicipality(context: Context, id: String, name: String, lat: Double = 14.0700, lng: Double = 120.6300) {
+    val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+    prefs.edit()
+        .putString("selected_municipality_id", id)
+        .putString("selected_municipality_name", name)
+        .putFloat("selected_municipality_lat", lat.toFloat())
+        .putFloat("selected_municipality_lng", lng.toFloat())
+        .apply()
+
+    selectedMunicipalityId = id
+    selectedMunicipalityName = name
+    detectedLocationName = name.substringBefore(",").trim()
+    activeOrganization = activeOrganization.copy(
+        municipalityId = id,
+        assignedMunicipality = name
+    )
+
+    CoroutineScope(Dispatchers.IO).launch {
+        checkGeographyDatasetReadiness(id)
+        fetchSchedulesFromSupabase(context)
+        fetchTrucksFromSupabase(context)
+        fetchTruckerAccountsFromSupabase(context)
+        fetchDumpsitesFromSupabase(context)
+        fetchAnonymousReportsFromSupabase()
+    }
+}
+
+suspend fun checkGeographyDatasetReadiness(locationId: String): Boolean {
+    try {
+        val res = SupabaseClient.fetchPublicTableRecords("geography_datasets?location_id=eq.$locationId&select=*")
+        if (res.isSuccess && res.data != null && res.data.length() > 0) {
+            val obj = res.data.getJSONObject(0)
+            val status = obj.optString("status", "pending")
+            val boundaryReady = obj.optBoolean("boundary_ready", false)
+            return status.equals("ready", ignoreCase = true) || boundaryReady
+        }
+    } catch (e: Exception) {
+        Log.e("HAKOT_GIS", "Error checking geography dataset readiness", e)
+    }
+    return true
+}
+
+suspend fun fetchMunicipalitiesFromSupabase(context: Context): Boolean {
+    try {
+        val res = SupabaseClient.fetchPublicTableRecords("municipalities")
+        if (res.isSuccess && res.data != null) {
+            val list = mutableListOf<MunicipalityItem>()
+            for (i in 0 until res.data.length()) {
+                val obj = res.data.getJSONObject(i)
+                val id = obj.optString("id", obj.optString("municipality_id", ""))
+                val name = obj.optString("name", obj.optString("municipality_name", obj.optString("title", "Nasugbu, Batangas")))
+                val prov = obj.optString("province", "Batangas")
+                val reg = obj.optString("region", "CALABARZON")
+                val lat = obj.optDouble("center_lat", obj.optDouble("latitude", 14.0700))
+                val lng = obj.optDouble("center_lng", obj.optDouble("longitude", 120.6300))
+                if (id.isNotBlank() && name.isNotBlank()) {
+                    list.add(MunicipalityItem(id = id, name = name, province = prov, region = reg, centerLat = lat, centerLng = lng))
+                }
+            }
+            if (list.isNotEmpty()) {
+                if (!list.any { it.name.contains("Nasugbu", ignoreCase = true) }) {
+                    list.add(0, MunicipalityItem(
+                        id = "cb394eb7-a8b7-45f2-a314-3926baeab31f",
+                        name = "Nasugbu, Batangas",
+                        province = "Batangas",
+                        region = "CALABARZON",
+                        centerLat = 14.0700,
+                        centerLng = 120.6300
+                    ))
+                }
+                municipalities.clear()
+                municipalities.addAll(list)
+            }
+            return true
+        }
+    } catch (e: Exception) {
+        Log.e("HAKOT_REPO", "Error fetching municipalities from Supabase", e)
+    }
+    if (!municipalities.any { it.name.contains("Nasugbu", ignoreCase = true) }) {
+        municipalities.add(
+            0,
+            MunicipalityItem(
+                id = "cb394eb7-a8b7-45f2-a314-3926baeab31f",
+                name = "Nasugbu, Batangas",
+                province = "Batangas",
+                region = "CALABARZON",
+                centerLat = 14.0700,
+                centerLng = 120.6300
+            )
+        )
+    }
+    return false
+}
 
     fun getDisplayStatus(rawStatus: String): String {
         return when (rawStatus.lowercase()) {

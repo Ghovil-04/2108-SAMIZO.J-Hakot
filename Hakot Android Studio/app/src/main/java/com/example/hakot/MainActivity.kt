@@ -37,6 +37,9 @@ import com.example.hakot.ui.screens.HakotDrawerContent
 import com.example.hakot.ui.screens.HomeScreen
 import com.example.hakot.ui.screens.ReportScreen
 import com.example.hakot.ui.screens.ScheduleScreen
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import com.example.hakot.ui.screens.MunicipalitySelectionModal
 import com.example.hakot.ui.theme.DarkBackground
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -63,10 +66,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun HakotMainApp() {
-    // Save tab, search, and admin state across rotation
-    var selectedTab by   rememberSaveable { mutableStateOf(HakotTab.MAP) }
+    val context = LocalContext.current
+    var selectedTab by rememberSaveable { mutableStateOf(HakotTab.MAP) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var isAdminMode by rememberSaveable { mutableStateOf<Boolean>(HakotRepository.isAuthenticated) }
+    var showMunicipalityModal by remember {
+        mutableStateOf(HakotRepository.getSavedMunicipalityId(context) == null)
+    }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -84,6 +90,10 @@ fun HakotMainApp() {
                 isAdminMode = isAdminMode,
                 onToggleAdminMode = { enabled ->
                     isAdminMode = enabled
+                    scope.launch { drawerState.close() }
+                },
+                onChangeMunicipality = {
+                    showMunicipalityModal = true
                     scope.launch { drawerState.close() }
                 },
                 onCloseDrawer = {
@@ -177,5 +187,16 @@ fun HakotMainApp() {
                 }
             }
         }
+    }
+
+    if (showMunicipalityModal) {
+        MunicipalitySelectionModal(
+            onDismiss = { showMunicipalityModal = false },
+            onMunicipalitySelected = { id, name ->
+                HakotRepository.saveSelectedMunicipality(context, id, name)
+                Toast.makeText(context, "Active Municipality set to $name", Toast.LENGTH_SHORT).show()
+                showMunicipalityModal = false
+            }
+        )
     }
 }

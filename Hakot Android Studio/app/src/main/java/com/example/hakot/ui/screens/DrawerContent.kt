@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.LocationCity
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.Recycling
@@ -49,10 +50,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.hakot.data.HakotRepository
 import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurface
 import com.example.hakot.ui.theme.EcoGreenContainer
@@ -66,6 +69,7 @@ import com.example.hakot.ui.theme.TextOnDarkSecondary
 fun HakotDrawerContent(
     isAdminMode: Boolean,
     onToggleAdminMode: (Boolean) -> Unit,
+    onChangeMunicipality: () -> Unit = {},
     onCloseDrawer: () -> Unit
 ) {
     var showPinDialog by remember { mutableStateOf(false) }
@@ -148,11 +152,19 @@ fun HakotDrawerContent(
                 }
             )
 
+            val context = LocalContext.current
+            val activeName = HakotRepository.selectedMunicipalityName?.substringBefore(",")?.trim()
+                ?: HakotRepository.getSavedMunicipalityName(context)?.substringBefore(",")?.trim()
+                ?: HakotRepository.activeOrganization.assignedMunicipality.substringBefore(",").trim().ifBlank { "Nasugbu" }
+
             DrawerItemRow(
-                icon = Icons.Default.Contrast,
-                title = "Dark Waste Theme",
-                subtitle = "Active (Enforced)",
-                onClick = {}
+                icon = Icons.Default.LocationCity,
+                title = "Change Municipality",
+                subtitle = "Active: $activeName",
+                onClick = {
+                    onChangeMunicipality()
+                    onCloseDrawer()
+                }
             )
 
             // System Administration Item in Settings
