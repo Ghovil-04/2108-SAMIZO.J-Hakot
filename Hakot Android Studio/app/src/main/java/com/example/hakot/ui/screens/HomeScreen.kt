@@ -48,11 +48,13 @@ import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AddAlert
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Security
@@ -63,6 +65,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -75,6 +79,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -136,6 +141,7 @@ fun HomeScreen(
     searchQuery: String = "",
     onQueryChange: (String) -> Unit = {},
     onMenuClick: () -> Unit = {},
+    onNotificationClick: () -> Unit = {},
     isAdminMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -170,6 +176,7 @@ fun HomeScreen(
             HakotRepository.fetchTruckerAccountsFromSupabase(context)
             HakotRepository.fetchDumpsitesFromSupabase(context)
             HakotRepository.fetchAnonymousReportsFromSupabase()
+            HakotRepository.fetchBarangaysAndStreetsForMunicipality(HakotRepository.activeOrganization.municipalityId, context)
 
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
@@ -183,6 +190,16 @@ fun HomeScreen(
                 locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             }
             Log.d("HAKOT_HOME", "Fetch all launch data on home succeeded. Schedules count=${HakotRepository.schedules.size}")
+
+            val globalNotif = HakotRepository.getGlobalNotificationsEnabled(context)
+            val enabledList = HakotRepository.schedules.filter { HakotRepository.isScheduleNotificationEnabled(context, it.id) }
+            if (globalNotif && enabledList.isNotEmpty()) {
+                HakotRepository.showSystemNotification(
+                    context,
+                    "🔔 Hakot Active Notifications",
+                    "Monitoring ${enabledList.size} schedule(s) for collection."
+                )
+            }
         } catch (e: Exception) {
             Log.e("HAKOT_HOME", "Error fetching launch data on home screen", e)
         }
@@ -337,6 +354,7 @@ fun HomeScreen(
                 query = searchQuery,
                 onQueryChange = onQueryChange,
                 onMenuClick = onMenuClick,
+                onNotificationClick = onNotificationClick,
                 isAdminMode = isAdminMode,
                 onSelectSuggestion = { _, lat, lon ->
                     focusedSearchPoint = GeoPoint(lat, lon)
@@ -639,7 +657,7 @@ fun AnonymousReportModal(
             Text("Issue Category:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
             Spacer(modifier = Modifier.height(4.dp))
 
-            Box(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Surface(
                     onClick = { if (!isSubmitting) isCategoryDropdownExpanded = !isCategoryDropdownExpanded },
                     color = HazardousRedContainer,
@@ -688,46 +706,55 @@ fun AnonymousReportModal(
                     }
                 }
 
-                DropdownMenu(
-                    expanded = isCategoryDropdownExpanded,
-                    onDismissRequest = { isCategoryDropdownExpanded = false },
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .background(DarkSurfaceCard)
-                ) {
-                    ReportType.entries.forEachIndexed { index, type ->
-                        DropdownMenuItem(
-                            text = {
-                                Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                                    Text(
-                                        text = type.title,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (type == selectedType) HazardousRed else TextOnDarkPrimary
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = type.description,
-                                        fontSize = 10.sp,
-                                        color = TextOnDarkSecondary
-                                    )
+                AnimatedVisibility(visible = isCategoryDropdownExpanded) {
+                    Column {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            color = DarkSurfaceCard,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, DarkBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(6.dp)) {
+                                ReportType.entries.forEachIndexed { index, type ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                selectedType = type
+                                                isCategoryDropdownExpanded = false
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ReportProblem,
+                                            contentDescription = type.title,
+                                            tint = if (type == selectedType) HazardousRed else TextOnDarkMuted,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(
+                                                text = type.title,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (type == selectedType) HazardousRed else TextOnDarkPrimary
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = type.description,
+                                                fontSize = 10.sp,
+                                                color = TextOnDarkSecondary
+                                            )
+                                        }
+                                    }
+                                    if (index < ReportType.entries.size - 1) {
+                                        HorizontalDivider(color = DarkBorder.copy(alpha = 0.4f), thickness = 0.5.dp)
+                                    }
                                 }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.ReportProblem,
-                                    contentDescription = type.title,
-                                    tint = if (type == selectedType) HazardousRed else TextOnDarkMuted,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            onClick = {
-                                selectedType = type
-                                isCategoryDropdownExpanded = false
                             }
-                        )
-                        if (index < ReportType.entries.size - 1) {
-                            HorizontalDivider(color = DarkBorder.copy(alpha = 0.4f), thickness = 0.5.dp)
                         }
                     }
                 }
@@ -888,7 +915,7 @@ fun CollectionStatusCardItem(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            // Header: Status of the schedule
+            // Header: Status of the schedule & Notification Bell Icon
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -900,6 +927,28 @@ fun CollectionStatusCardItem(
                     fontWeight = FontWeight.Bold,
                     color = SafetyOrange
                 )
+
+                if (schedule != null) {
+                    var isNotifOn by remember(schedule.id) {
+                        mutableStateOf(HakotRepository.isScheduleNotificationEnabled(context, schedule.id))
+                    }
+                    IconButton(
+                        onClick = {
+                            val newState = HakotRepository.toggleScheduleNotification(context, schedule.id)
+                            isNotifOn = newState
+                            val msg = if (newState) "Notification enabled for ${schedule.routeName}" else "Notification disabled for ${schedule.routeName}"
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Notifications,
+                            contentDescription = "Toggle Notification",
+                            tint = if (isNotifOn) SafetyOrange else Color(0xFF94A3B8), // Pale white / muted gray-white
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -1056,12 +1105,14 @@ fun EmptyCollectionStatusCard(modifier: Modifier = Modifier) {
 @Composable
 fun MunicipalitySelectionModal(
     onDismiss: () -> Unit,
-    onMunicipalitySelected: (id: String, name: String) -> Unit
+    onMunicipalitySelected: (id: String, name: String, lat: Double, lng: Double) -> Unit
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var selectedItem by remember { mutableStateOf<MunicipalityItem?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var showConfirmDialog by remember { mutableStateOf(false) }
+    var pendingItem by remember { mutableStateOf<MunicipalityItem?>(null) }
 
     LaunchedEffect(Unit) {
         isLoading = true
@@ -1077,136 +1128,171 @@ fun MunicipalitySelectionModal(
         }
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            color = DarkBackground,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .fillMaxWidth(0.92f)
-                        .border(1.dp, DarkBorder, RoundedCornerShape(20.dp))
+    if (showConfirmDialog && pendingItem != null) {
+        AlertDialog(
+            onDismissRequest = { showConfirmDialog = false },
+            containerColor = DarkSurfaceCard,
+            shape = RoundedCornerShape(16.dp),
+            title = {
+                Text("Confirm Municipality Change", color = EcoGreenLight, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Text("Are you sure you want to change your active municipality to ${pendingItem?.name}?", color = TextOnDarkSecondary, fontSize = 13.sp)
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingItem?.let {
+                            onMunicipalitySelected(it.id, it.name, it.centerLat, it.centerLng)
+                        }
+                        showConfirmDialog = false
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    shape = RoundedCornerShape(10.dp)
                 ) {
-                    Column(
+                    Text("Confirm", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmDialog = false }) {
+                    Text("Cancel", color = TextOnDarkSecondary, fontSize = 12.sp)
+                }
+            }
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurfaceCard,
+        shape = RoundedCornerShape(20.dp),
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Select Your Municipality",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = EcoGreenLight
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = TextOnDarkSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Choose your municipality to access the correct waste collection schedules, announcements, and local reports.",
+                    fontSize = 11.5.sp,
+                    color = TextOnDarkSecondary
+                )
+
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search your municipality...", fontSize = 12.sp, color = TextOnDarkMuted) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = EcoGreenPrimary,
+                        unfocusedBorderColor = DarkBorder,
+                        focusedTextColor = TextOnDarkPrimary,
+                        unfocusedTextColor = TextOnDarkPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                )
+
+                if (isLoading) {
+                    Box(modifier = Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = EcoGreenPrimary, modifier = Modifier.size(28.dp))
+                    }
+                } else if (filteredList.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "No municipality found matching \"$searchQuery\".",
+                            fontSize = 12.sp,
+                            color = TextOnDarkSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    LazyColumn(
                         modifier = Modifier
-                            .padding(20.dp)
-                            .fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .fillMaxWidth()
+                            .height(220.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "Select Your Municipality",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = EcoGreenLight
-                        )
-                        Text(
-                            text = "Choose your municipality to access the correct waste collection schedules, announcements, and local reports.",
-                            fontSize = 11.5.sp,
-                            color = TextOnDarkSecondary
-                        )
-
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search your municipality...", fontSize = 12.sp, color = TextOnDarkMuted) },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = EcoGreenPrimary,
-                                unfocusedBorderColor = DarkBorder,
-                                focusedTextColor = TextOnDarkPrimary,
-                                unfocusedTextColor = TextOnDarkPrimary
-                            ),
-                            modifier = Modifier.fillMaxWidth().height(48.dp)
-                        )
-
-                        if (isLoading) {
-                            Box(modifier = Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = EcoGreenPrimary, modifier = Modifier.size(28.dp))
-                            }
-                        } else if (filteredList.isEmpty()) {
-                            Box(modifier = Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "No municipality found matching \"$searchQuery\".",
-                                    fontSize = 12.sp,
-                                    color = TextOnDarkSecondary,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        } else {
-                            LazyColumn(
+                        items(filteredList) { item ->
+                            val isSelected = selectedItem?.id == item.id || (selectedItem == null && HakotRepository.activeOrganization.municipalityId == item.id)
+                            Surface(
+                                color = if (isSelected) EcoGreenContainer else DarkSurface,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, if (isSelected) EcoGreenPrimary else DarkBorder),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(220.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    .clickable { selectedItem = item }
                             ) {
-                                items(filteredList) { item ->
-                                    val isSelected = selectedItem?.id == item.id || (selectedItem == null && HakotRepository.activeOrganization.municipalityId == item.id)
-                                    Surface(
-                                        color = if (isSelected) EcoGreenContainer else DarkSurface,
-                                        shape = RoundedCornerShape(10.dp),
-                                        border = BorderStroke(1.dp, if (isSelected) EcoGreenPrimary else DarkBorder),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { selectedItem = item }
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Column {
-                                                Text(
-                                                    text = item.name,
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = if (isSelected) EcoGreenLight else TextOnDarkPrimary
-                                                )
-                                                Text(
-                                                    text = "${item.province}, ${item.region}",
-                                                    fontSize = 10.sp,
-                                                    color = TextOnDarkSecondary
-                                                )
-                                            }
-                                            if (isSelected) {
-                                                Text("Selected ✓", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                                            }
-                                        }
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = item.name,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) EcoGreenLight else TextOnDarkPrimary
+                                        )
+                                        Text(
+                                            text = "${item.province}, ${item.region}",
+                                            fontSize = 10.sp,
+                                            color = TextOnDarkSecondary
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Text("Selected ✓", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                                     }
                                 }
                             }
                         }
-
-                        Button(
-                            onClick = {
-                                val itemToSave = selectedItem ?: filteredList.firstOrNull()
-                                if (itemToSave != null) {
-                                    onMunicipalitySelected(itemToSave.id, itemToSave.name)
-                                    onDismiss()
-                                }
-                            },
-                            enabled = selectedItem != null || filteredList.isNotEmpty(),
-                            colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(46.dp)
-                        ) {
-                            Text("Continue", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        }
                     }
                 }
             }
-        }
-    }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val itemToSave = selectedItem ?: filteredList.firstOrNull()
+                    if (itemToSave != null) {
+                        pendingItem = itemToSave
+                        showConfirmDialog = true
+                    }
+                },
+                enabled = selectedItem != null || filteredList.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Text("Continue", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        },
+        dismissButton = {}
+    )
 }

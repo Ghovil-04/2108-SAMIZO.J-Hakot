@@ -39,7 +39,10 @@ import com.example.hakot.ui.screens.ReportScreen
 import com.example.hakot.ui.screens.ScheduleScreen
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.example.hakot.ui.screens.MunicipalitySelectionModal
+import com.example.hakot.ui.screens.NotificationScreen
 import com.example.hakot.ui.theme.DarkBackground
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -74,9 +77,10 @@ fun HakotMainApp() {
     var selectedTab by rememberSaveable { mutableStateOf(HakotTab.MAP) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var isAdminMode by rememberSaveable { mutableStateOf<Boolean>(HakotRepository.isAuthenticated) }
-    var showMunicipalityModal by remember {
+    var showMunicipalityModal by rememberSaveable {
         mutableStateOf(HakotRepository.getSavedMunicipalityId(context) == null)
     }
+    var showNotificationScreen by rememberSaveable { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -97,8 +101,8 @@ fun HakotMainApp() {
                     scope.launch { drawerState.close() }
                 },
                 onChangeMunicipality = {
-                    showMunicipalityModal = true
                     scope.launch { drawerState.close() }
+                    showMunicipalityModal = true
                 },
                 onCloseDrawer = {
                     scope.launch { drawerState.close() }
@@ -169,6 +173,7 @@ fun HakotMainApp() {
                                     searchQuery = searchQuery,
                                     onQueryChange = { searchQuery = it },
                                     onMenuClick = onMenuClick,
+                                    onNotificationClick = { showNotificationScreen = true },
                                     isAdminMode = isAdminMode
                                 )
                                 HakotTab.SCHEDULE -> ScheduleScreen(
@@ -196,11 +201,17 @@ fun HakotMainApp() {
     if (showMunicipalityModal) {
         MunicipalitySelectionModal(
             onDismiss = { showMunicipalityModal = false },
-            onMunicipalitySelected = { id, name ->
-                HakotRepository.saveSelectedMunicipality(context, id, name)
+            onMunicipalitySelected = { id, name, lat, lng ->
+                HakotRepository.saveSelectedMunicipality(context, id, name, lat, lng)
                 Toast.makeText(context, "Active Municipality set to $name", Toast.LENGTH_SHORT).show()
                 showMunicipalityModal = false
             }
+        )
+    }
+
+    if (showNotificationScreen) {
+        NotificationScreen(
+            onDismiss = { showNotificationScreen = false }
         )
     }
 }

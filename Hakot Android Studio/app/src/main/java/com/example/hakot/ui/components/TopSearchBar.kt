@@ -70,18 +70,30 @@ fun TopSearchBar(
     val activeLocation = HakotRepository.selectedMunicipalityName?.substringBefore(",")?.trim()
         ?: HakotRepository.activeOrganization.assignedMunicipality.substringBefore(",").trim().ifBlank { "Nasugbu" }
 
-    val suggestions = remember(query) {
+    val suggestions = remember(query, GisManager.barangays.size, GisManager.roadSegments.size) {
         if (query.isBlank()) emptyList()
         else {
             val list = mutableListOf<Triple<String, Double, Double>>()
-            // 1. Municipalities & Provinces
-            HakotRepository.municipalities.filter {
-                it.name.contains(query, ignoreCase = true) || it.province.contains(query, ignoreCase = true)
-            }.forEach {
-                list.add(Triple(it.name, it.centerLat, it.centerLng))
+
+            // 1. Barangays from public.barangays (GisManager) for active municipality
+            GisManager.barangays.filter {
+                it.name.contains(query, ignoreCase = true)
+            }.forEach { bgy ->
+                val allPts = bgy.polygonRings.flatten()
+                if (allPts.isNotEmpty()) {
+                    val avgLat = allPts.map { it.second }.filter { it.isFinite() }.average()
+                    val avgLon = allPts.map { it.first }.filter { it.isFinite() }.average()
+                    if (avgLat.isFinite() && avgLon.isFinite()) {
+                        list.add(Triple(bgy.name, avgLat, avgLon))
+                    }
+                }
             }
-            // 2. Streets
-            GisManager.roadSegments.filter { it.segmentName.contains(query, ignoreCase = true) }.take(5).forEach { road ->
+
+            // 2. Streets from public.streets (GisManager) for active municipality
+            GisManager.roadSegments.filter { road ->
+                !road.segmentName.contains("Unnamed road", ignoreCase = true) &&
+                road.segmentName.contains(query, ignoreCase = true)
+            }.distinctBy { it.segmentName }.take(8).forEach { road ->
                 val coords = if (road.clippedCoordinates.isNotEmpty()) road.clippedCoordinates else road.lineStringCoordinates
                 if (coords.isNotEmpty()) {
                     val avgLat = coords.map { it.second }.filter { it.isFinite() }.average()
@@ -91,23 +103,8 @@ fun TopSearchBar(
                     }
                 }
             }
-            // 3. Routes
-            HakotRepository.routes.filter { it.routeName.contains(query, ignoreCase = true) }.forEach { r ->
-                if (r.geoPoints.isNotEmpty()) {
-                    val avgLat = r.geoPoints.map { it.second }.filter { it.isFinite() }.average()
-                    val avgLon = r.geoPoints.map { it.first }.filter { it.isFinite() }.average()
-                    if (avgLat.isFinite() && avgLon.isFinite()) {
-                        list.add(Triple(r.routeName, avgLat, avgLon))
-                    }
-                }
-            }
-            // 4. Dumpsites
-            HakotRepository.dumpsites.filter { it.name.contains(query, ignoreCase = true) }.forEach { d ->
-                if (d.latitude.isFinite() && d.longitude.isFinite()) {
-                    list.add(Triple(d.name, d.latitude, d.longitude))
-                }
-            }
-            list.distinctBy { it.first }.take(6)
+
+            list.distinctBy { it.first.lowercase() }.take(8)
         }
     }
 

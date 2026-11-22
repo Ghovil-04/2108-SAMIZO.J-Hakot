@@ -21,12 +21,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -427,29 +429,52 @@ fun ScheduleCardItem(schedule: ScheduleItem, onClick: () -> Unit = {}) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Subtle Red Pill for MISSED status, clean neutral for others
-                if (displayStatus.uppercase() == "MISSED") {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(HazardousRedContainer)
-                            .border(1.dp, HazardousRed.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                val context = LocalContext.current
+                var isNotifOn by remember(schedule.id) {
+                    mutableStateOf(HakotRepository.isScheduleNotificationEnabled(context, schedule.id))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(
+                        onClick = {
+                            val newState = HakotRepository.toggleScheduleNotification(context, schedule.id)
+                            isNotifOn = newState
+                            val msg = if (newState) "Notification enabled for ${schedule.routeName}" else "Notification disabled for ${schedule.routeName}"
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(28.dp)
                     ) {
-                        Text(
-                            text = "MISSED",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = HazardousRed
+                        Icon(
+                            imageVector = Icons.Default.Notifications,
+                            contentDescription = "Toggle Notification",
+                            tint = if (isNotifOn) SafetyOrange else Color(0xFF94A3B8),
+                            modifier = Modifier.size(16.dp)
                         )
                     }
-                } else {
-                    Text(
-                        text = displayStatus,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextOnDarkSecondary
-                    )
+
+                    // Subtle Red Pill for MISSED status, clean neutral for others
+                    if (displayStatus.uppercase() == "MISSED") {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(HazardousRedContainer)
+                                .border(1.dp, HazardousRed.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "MISSED",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = HazardousRed
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = displayStatus,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnDarkSecondary
+                        )
+                    }
                 }
             }
 

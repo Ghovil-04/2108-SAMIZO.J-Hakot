@@ -164,9 +164,7 @@ fun HakotDrawerContent(
             )
 
             val context = LocalContext.current
-            val activeName = HakotRepository.selectedMunicipalityName?.substringBefore(",")?.trim()
-                ?: HakotRepository.getSavedMunicipalityName(context)?.substringBefore(",")?.trim()
-                ?: HakotRepository.activeOrganization.assignedMunicipality.substringBefore(",").trim().ifBlank { "Nasugbu" }
+            val activeName = HakotRepository.activeOrganization.assignedMunicipality.substringBefore(",").trim().ifBlank { "Nasugbu" }
 
             DrawerItemRow(
                 icon = Icons.Default.LocationCity,

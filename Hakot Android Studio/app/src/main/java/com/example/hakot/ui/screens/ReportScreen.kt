@@ -1,9 +1,11 @@
 package com.example.hakot.ui.screens
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -181,14 +183,7 @@ fun ReportScreen(
             Text("Issue Category:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
             Spacer(modifier = Modifier.height(4.dp))
 
-            var boxWidth by remember { mutableStateOf(0) }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onGloballyPositioned { coordinates ->
-                        boxWidth = coordinates.size.width
-                    }
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Surface(
                     onClick = { if (!isSubmitting) isCategoryDropdownExpanded = !isCategoryDropdownExpanded },
                     color = HazardousRedContainer,
@@ -237,45 +232,55 @@ fun ReportScreen(
                     }
                 }
 
-                DropdownMenu(
-                    expanded = isCategoryDropdownExpanded,
-                    onDismissRequest = { isCategoryDropdownExpanded = false },
-                    containerColor = DarkSurfaceCard,
-                    modifier = Modifier.width(with(LocalDensity.current) { boxWidth.toDp() })
-                ) {
-                    ReportType.entries.forEachIndexed { index, type ->
-                        DropdownMenuItem(
-                            text = {
-                                Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                                    Text(
-                                        text = type.title,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (type == selectedType) HazardousRed else TextOnDarkPrimary
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = type.description,
-                                        fontSize = 10.sp,
-                                        color = TextOnDarkSecondary
-                                    )
+                AnimatedVisibility(visible = isCategoryDropdownExpanded) {
+                    Column {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            color = DarkSurfaceCard,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, DarkBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(6.dp)) {
+                                ReportType.entries.forEachIndexed { index, type ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                selectedType = type
+                                                isCategoryDropdownExpanded = false
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ReportProblem,
+                                            contentDescription = type.title,
+                                            tint = if (type == selectedType) HazardousRed else TextOnDarkMuted,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(
+                                                text = type.title,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (type == selectedType) HazardousRed else TextOnDarkPrimary
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = type.description,
+                                                fontSize = 10.sp,
+                                                color = TextOnDarkSecondary
+                                            )
+                                        }
+                                    }
+                                    if (index < ReportType.entries.size - 1) {
+                                        HorizontalDivider(color = DarkBorder.copy(alpha = 0.4f), thickness = 0.5.dp)
+                                    }
                                 }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.ReportProblem,
-                                    contentDescription = type.title,
-                                    tint = if (type == selectedType) HazardousRed else TextOnDarkMuted,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            onClick = {
-                                selectedType = type
-                                isCategoryDropdownExpanded = false
                             }
-                        )
-                        if (index < ReportType.entries.size - 1) {
-                            HorizontalDivider(color = DarkBorder.copy(alpha = 0.4f), thickness = 0.5.dp)
                         }
                     }
                 }

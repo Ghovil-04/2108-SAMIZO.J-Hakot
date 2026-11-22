@@ -1,12 +1,22 @@
 package com.example.hakot.data
 
+import android.app.AlarmManager
 import android.content.Context
 import android.util.Log
 import android.os.Build
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
+import androidx.core.app.NotificationCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.example.hakot.MainActivity
+import com.example.hakot.R
 import com.example.hakot.model.AccountApplication
 import com.example.hakot.model.AccountInvitation
 import com.example.hakot.model.AdminStatus
@@ -1770,12 +1780,57 @@ fun saveSelectedMunicipality(context: Context, id: String, name: String, lat: Do
 
     CoroutineScope(Dispatchers.IO).launch {
         checkGeographyDatasetReadiness(id)
+        fetchBarangaysAndStreetsForMunicipality(id, context)
         fetchSchedulesFromSupabase(context)
         fetchTrucksFromSupabase(context)
         fetchTruckerAccountsFromSupabase(context)
         fetchDumpsitesFromSupabase(context)
         fetchAnonymousReportsFromSupabase()
     }
+}
+
+suspend fun fetchBarangaysAndStreetsForMunicipality(municipalityId: String, context: Context? = null): Boolean {
+    try {
+        val bgyRes = SupabaseClient.fetchPublicTableRecords("barangays?municipality_id=eq.$municipalityId&select=*")
+        if (bgyRes.isSuccess && bgyRes.data != null && bgyRes.data.length() > 0) {
+            val list = mutableListOf<GisBarangayFeature>()
+            for (i in 0 until bgyRes.data.length()) {
+                val obj = bgyRes.data.getJSONObject(i)
+                val id = obj.optString("id", "bgy_$i")
+                val name = obj.optString("name", obj.optString("barangay_name", "Barangay $i"))
+                val code = obj.optString("code", "")
+                val lat = obj.optDouble("center_lat", obj.optDouble("latitude", 14.0700))
+                val lon = obj.optDouble("center_lng", obj.optDouble("longitude", 120.6300))
+                val ring = listOf(Pair(lon, lat))
+                list.add(GisBarangayFeature(id, name, code, listOf(ring)))
+            }
+            if (list.isNotEmpty()) {
+                GisManager.barangays.clear()
+                GisManager.barangays.addAll(list)
+            }
+        }
+
+        val streetRes = SupabaseClient.fetchPublicTableRecords("streets?municipality_id=eq.$municipalityId&select=*")
+        if (streetRes.isSuccess && streetRes.data != null && streetRes.data.length() > 0) {
+            val list = mutableListOf<GisRoadSegmentFeature>()
+            for (i in 0 until streetRes.data.length()) {
+                val obj = streetRes.data.getJSONObject(i)
+                val id = obj.optString("id", "street_$i")
+                val name = obj.optString("name", obj.optString("segment_name", obj.optString("street_name", "Street $i")))
+                val lat = obj.optDouble("latitude", obj.optDouble("center_lat", 14.0700))
+                val lon = obj.optDouble("longitude", obj.optDouble("center_lng", 120.6300))
+                val line = listOf(Pair(lon, lat))
+                list.add(GisRoadSegmentFeature(id, name, "primary", 0L, line))
+            }
+            if (list.isNotEmpty()) {
+                GisManager.roadSegments.clear()
+                GisManager.roadSegments.addAll(list)
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("HAKOT_REPO", "Error fetching barangays & streets for $municipalityId", e)
+    }
+    return GisManager.loadGisData()
 }
 
 suspend fun checkGeographyDatasetReadiness(locationId: String): Boolean {
@@ -1977,8 +2032,8 @@ suspend fun fetchMunicipalitiesFromSupabase(context: Context): Boolean {
         Log.d("HAKOT_ROUTE", "Fetching schedules from Supabase...")
 
         var fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("schedules?municipality_id=eq.${activeOrganization.municipalityId}", token)
-        if (!fetchRes.isSuccess || fetchRes.data == null || fetchRes.data.length() == 0) {
-            fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("schedules?select=*", token)
+        if (!fetchRes.isSuccess || fetchRes.data == null) {
+            fetchRes = SupabaseClient.fetchPublicTableRecords("schedules?municipality_id=eq.${activeOrganization.municipalityId}")
         }
         if (fetchRes.isSuccess && fetchRes.data != null) {
             try {
@@ -2129,5 +2184,150 @@ suspend fun fetchMunicipalitiesFromSupabase(context: Context): Boolean {
             }
         }
         return false
+    }
+
+    fun getGlobalNotificationsEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        return prefs.getBoolean("global_notifications_enabled", false)
+    }
+
+    fun setGlobalNotificationsEnabled(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("global_notifications_enabled", enabled).apply()
+    }
+
+    fun isScheduleNotificationEnabled(context: Context, scheduleId: String): Boolean {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        val set = prefs.getStringSet("enabled_notification_schedules", emptySet()) ?: emptySet()
+        return set.contains(scheduleId)
+    }
+
+    fun toggleScheduleNotification(context: Context, scheduleId: String): Boolean {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        val set = (prefs.getStringSet("enabled_notification_schedules", emptySet()) ?: emptySet()).toMutableSet()
+        val sch = schedules.find { it.id == scheduleId }
+        val newState = if (set.contains(scheduleId)) {
+            set.remove(scheduleId)
+            cancelAlarmForSchedule(context, scheduleId)
+            false
+        } else {
+            set.add(scheduleId)
+            prefs.edit().putBoolean("global_notifications_enabled", true).apply()
+            if (sch != null) {
+                showSystemNotification(context, "🔔 Schedule Alert Enabled", "You'll receive updates for ${sch.routeName} (${sch.barangay})")
+                // Schedule alarm for 1 minute from now for testing, or target time
+                val triggerTime = System.currentTimeMillis() + 10000L // 10 seconds test or schedule time
+                scheduleAlarmForSchedule(context, sch.id, sch.routeName, sch.barangay, triggerTime)
+            }
+            true
+        }
+        prefs.edit().putStringSet("enabled_notification_schedules", set).apply()
+        return newState
+    }
+
+    fun scheduleAlarmForSchedule(context: Context, scheduleId: String, routeName: String, barangay: String, triggerAtMillis: Long) {
+        try {
+            if (triggerAtMillis <= System.currentTimeMillis()) return
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(context, HakotNotificationReceiver::class.java).apply {
+                putExtra("title", "🔔 Collection Alert: $routeName")
+                putExtra("message", "Upcoming collection in Barangay $barangay soon.")
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                context, scheduleId.hashCode(), intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            } else {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+            }
+            Log.d("HAKOT_ALARM", "Scheduled alarm for $routeName at $triggerAtMillis")
+        } catch (e: Exception) {
+            Log.e("HAKOT_ALARM", "Error scheduling alarm", e)
+        }
+    }
+
+    fun cancelAlarmForSchedule(context: Context, scheduleId: String) {
+        try {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(context, HakotNotificationReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context, scheduleId.hashCode(), intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            alarmManager.cancel(pendingIntent)
+        } catch (e: Exception) {
+            Log.e("HAKOT_ALARM", "Error cancelling alarm", e)
+        }
+    }
+
+    fun showSystemNotification(context: Context, title: String, message: String) {
+        try {
+            val channelId = "hakot_collection_notifications"
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    channelId,
+                    "Hakot Collection Alerts",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Waste collection and schedule reminders"
+                    enableVibration(true)
+                    setSound(
+                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context, 0, intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val builder = NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(R.drawable.hakot_logo)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+
+            notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
+        } catch (e: Exception) {
+            Log.e("HAKOT_NOTIF", "Error showing system notification", e)
+        }
+    }
+
+    fun getNotifSetting(context: Context, key: String, defaultVal: Boolean = true): Boolean {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        return prefs.getBoolean("notif_setting_$key", defaultVal)
+    }
+
+    fun setNotifSetting(context: Context, key: String, enabled: Boolean) {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("notif_setting_$key", enabled).apply()
+    }
+
+    fun getNotifTimeString(context: Context, key: String, defaultVal: String): String {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        return prefs.getString("notif_time_str_$key", defaultVal) ?: defaultVal
+    }
+
+    fun setNotifTimeString(context: Context, key: String, value: String) {
+        val prefs = context.getSharedPreferences("hakot_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("notif_time_str_$key", value).apply()
     }
 }
