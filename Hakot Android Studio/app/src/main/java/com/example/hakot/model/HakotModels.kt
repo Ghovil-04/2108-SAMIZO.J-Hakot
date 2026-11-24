@@ -6,6 +6,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 enum class WasteCategory(val displayName: String, val colorHex: Long) {
     GENERAL_WASTE("General Waste (All Trash Accepted)", 0xFF10B981),
@@ -186,10 +187,10 @@ data class TruckGpsTrailPoint(
 )
 
 data class Announcement(
-    val id: String,
+    val id: String = UUID.randomUUID().toString(),
     val title: String,
     val message: String,
-    val timestampMillis: Long,
+    val timestampMillis: Long = System.currentTimeMillis(),
     val category: String = "General",
     val isPinned: Boolean = false
 )

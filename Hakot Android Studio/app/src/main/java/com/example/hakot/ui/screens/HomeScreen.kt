@@ -132,6 +132,7 @@ import com.example.hakot.ui.theme.RecycleYellowContainer
 import com.example.hakot.ui.theme.ResidualCyan
 import com.example.hakot.ui.theme.ResidualCyanContainer
 import com.example.hakot.ui.theme.TextOnDarkMuted
+import com.example.hakot.ui.components.HakotTab
 import com.example.hakot.ui.theme.TextOnDarkPrimary
 import com.example.hakot.ui.theme.TextOnDarkSecondary
 
@@ -143,11 +144,13 @@ fun HomeScreen(
     onMenuClick: () -> Unit = {},
     onNotificationClick: () -> Unit = {},
     isAdminMode: Boolean = false,
+    selectedTab: HakotTab = HakotTab.MAP,
+    onTabSelected: (HakotTab) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var userLat by remember { mutableStateOf(14.0700) }
-    var userLon by remember { mutableStateOf(120.6300) }
+    var userLat by remember { mutableStateOf<Double?>(null) }
+    var userLon by remember { mutableStateOf<Double?>(null) }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -175,6 +178,7 @@ fun HomeScreen(
             HakotRepository.fetchTrucksFromSupabase(context)
             HakotRepository.fetchTruckerAccountsFromSupabase(context)
             HakotRepository.fetchDumpsitesFromSupabase(context)
+            HakotRepository.fetchAnnouncementsFromSupabase(context)
             HakotRepository.fetchAnonymousReportsFromSupabase()
             HakotRepository.fetchBarangaysAndStreetsForMunicipality(HakotRepository.activeOrganization.municipalityId, context)
 
@@ -356,6 +360,8 @@ fun HomeScreen(
                 onMenuClick = onMenuClick,
                 onNotificationClick = onNotificationClick,
                 isAdminMode = isAdminMode,
+                selectedTab = selectedTab,
+                onTabSelected = onTabSelected,
                 onSelectSuggestion = { _, lat, lon ->
                     focusedSearchPoint = GeoPoint(lat, lon)
                     searchFocusTrigger++
@@ -378,7 +384,7 @@ fun HomeScreen(
                     customRouteSegments = activeRouteSegments,
                     completedRouteSegments = completedRouteSegments,
                     autoCenterSinglePoint = true,
-                    userLocationPoint = GeoPoint(userLat, userLon),
+                    userLocationPoint = if (userLat != null && userLon != null) GeoPoint(userLat!!, userLon!!) else null,
                     truckerLocations = activeTruckerLocations,
                     truckerFocusPoint = focusedTruckerPoint,
                     truckerFocusTrigger = truckerFocusTrigger,
@@ -921,11 +927,18 @@ fun CollectionStatusCardItem(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val statusColor = when {
+                    cardStatus.equals("ACTIVE", true) || cardStatus.equals("COMPLETED", true) || cardStatus.equals("FINISH", true) || cardStatus.equals("DONE", true) -> EcoGreenLight
+                    cardStatus.equals("UPCOMING", true) || cardStatus.equals("DRAFT", true) || cardStatus.equals("SCHEDULED", true) -> TextOnDarkSecondary
+                    cardStatus.equals("MISSED", true) -> HazardousRed
+                    cardStatus.equals("ON_HOLD", true) || cardStatus.equals("HOLD", true) -> RecycleYellow
+                    else -> TextOnDarkSecondary
+                }
                 Text(
                     text = cardStatus,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = SafetyOrange
+                    color = statusColor
                 )
 
                 if (schedule != null) {

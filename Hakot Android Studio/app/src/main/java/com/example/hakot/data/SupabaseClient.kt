@@ -50,8 +50,8 @@ data class FetchProfileResult(
 
 object SupabaseClient {
 
-    const val SUPABASE_URL = "https://vyegsnkerrbdqacwegff.supabase.co"
-    const val SUPABASE_ANON_KEY = "sb_publishable_rd7efjfP3gHndcibiIVzHw_sshkqRxv"
+    const val SUPABASE_URL = "https://jyajakvomfkwksqiqqol.supabase.co"
+    const val SUPABASE_ANON_KEY = "sb_publishable_G6ODboBtsbJYedtcAvi2gw_BO-HTGhr"
 
     var connectionState: String by mutableStateOf("Checking...")
     var lastSyncTimestamp: String by mutableStateOf("Not Synced Yet")
@@ -376,13 +376,18 @@ object SupabaseClient {
             var connection: HttpURLConnection? = null
 
             try {
-                val urlString = "$SUPABASE_URL/rest/v1/$tableName?select=*"
+                val urlString = if (tableName.contains("?")) {
+                    "$SUPABASE_URL/rest/v1/$tableName"
+                } else {
+                    "$SUPABASE_URL/rest/v1/$tableName?select=*"
+                }
                 connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     setRequestProperty("apikey", SUPABASE_ANON_KEY)
                     setRequestProperty("Authorization", "Bearer $SUPABASE_ANON_KEY")
-                    connectTimeout = 5000
-                    readTimeout = 5000
+                    setRequestProperty("Range", "0-4999") // Bypass 1000-row PostgREST default limit
+                    connectTimeout = 15000
+                    readTimeout = 15000
                 }
 
                 val responseCode = connection.responseCode

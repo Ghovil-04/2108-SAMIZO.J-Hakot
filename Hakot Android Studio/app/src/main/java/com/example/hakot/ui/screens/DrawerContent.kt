@@ -1,15 +1,15 @@
 package com.example.hakot.ui.screens
 
+import android.app.Activity
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -21,25 +21,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
-import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.LocationCity
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PhoneInTalk
-import androidx.compose.material.icons.filled.Recycling
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,11 +51,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.hakot.R
 import com.example.hakot.data.HakotRepository
 import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurface
@@ -76,24 +75,25 @@ fun HakotDrawerContent(
     isAdminMode: Boolean,
     onToggleAdminMode: (Boolean) -> Unit,
     onChangeMunicipality: () -> Unit = {},
-    onCloseDrawer: () -> Unit
+    onCloseDrawer: () -> Unit = {},
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var showPinDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
-    var notificationsEnabled by remember { mutableStateOf(true) }
+    var showContactDialog by remember { mutableStateOf(false) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         HakotRepository.fetchMunicipalitiesFromSupabase(context)
     }
 
-    ModalDrawerSheet(
-        drawerContainerColor = DarkSurface,
-        drawerContentColor = TextOnDarkPrimary
+    Surface(
+        color = DarkSurface,
+        modifier = modifier.fillMaxSize()
     ) {
         Column(
             modifier = Modifier
-                .fillMaxHeight()
+                .fillMaxSize()
                 .padding(20.dp)
                 .verticalScroll(rememberScrollState())
         ) {
@@ -104,25 +104,17 @@ fun HakotDrawerContent(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Box(
+                Image(
+                    painter = painterResource(id = R.drawable.hakot_logo),
+                    contentDescription = "Hakot Logo",
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(42.dp)
                         .clip(CircleShape)
-                        .background(EcoGreenContainer)
-                        .border(1.dp, EcoGreenPrimary, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Recycling,
-                        contentDescription = "Logo",
-                        tint = EcoGreenPrimary,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
+                )
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
                     Text(
-                        text = "Hakot Eco System",
+                        text = "HAKOT",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextOnDarkPrimary
@@ -148,34 +140,6 @@ fun HakotDrawerContent(
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            DrawerItemRow(
-                icon = Icons.Default.Notifications,
-                title = "Truck Arrival Notifications",
-                trailing = {
-                    Switch(
-                        checked = notificationsEnabled,
-                        onCheckedChange = { notificationsEnabled = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.Black,
-                            checkedTrackColor = EcoGreenPrimary
-                        )
-                    )
-                }
-            )
-
-            val context = LocalContext.current
-            val activeName = HakotRepository.activeOrganization.assignedMunicipality.substringBefore(",").trim().ifBlank { "Nasugbu" }
-
-            DrawerItemRow(
-                icon = Icons.Default.LocationCity,
-                title = "Change Municipality",
-                subtitle = "Active: $activeName",
-                onClick = {
-                    onChangeMunicipality()
-                    onCloseDrawer()
-                }
-            )
-
             // System Administration Item in Settings
             DrawerItemRow(
                 icon = Icons.Default.AdminPanelSettings,
@@ -200,29 +164,41 @@ fun HakotDrawerContent(
 
             DrawerItemRow(
                 icon = Icons.Default.HelpOutline,
-                title = "Sanitation FAQ & Bin Rules",
-                subtitle = "What goes in which bin",
+                title = "Sanitation FAQ & Waste Management",
+                subtitle = "Bin rules and waste management info",
                 onClick = { showHelpDialog = true }
             )
 
             DrawerItemRow(
                 icon = Icons.Default.PhoneInTalk,
-                title = "LGU Waste Office Hotline",
-                subtitle = "(046) 888-HAKOT",
-                onClick = {}
+                title = "LGU Waste Office & Contact Info",
+                subtitle = "HakotOfficial@gmail.com",
+                onClick = { showContactDialog = true }
             )
 
             DrawerItemRow(
                 icon = Icons.Default.Security,
                 title = "Privacy & Anonymous Guarantee",
-                subtitle = "No login or personal data stored",
-                onClick = {}
+                subtitle = "Why and how the app is anonymous",
+                onClick = { showPrivacyDialog = true }
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = DarkBorder)
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Exit App Button
+            DrawerItemRow(
+                icon = Icons.Default.ExitToApp,
+                title = "Exit App",
+                subtitle = "Close Hakot application",
+                onClick = {
+                    (context as? Activity)?.finishAffinity()
+                }
             )
 
             Spacer(modifier = Modifier.weight(1f))
-
-            HorizontalDivider(color = DarkBorder)
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             val currentMunId = HakotRepository.activeOrganization.municipalityId.takeIf { it.isNotBlank() }
                 ?: HakotRepository.municipalities.firstOrNull()?.id
@@ -238,80 +214,132 @@ fun HakotDrawerContent(
         }
     }
 
-    // Secure PIN Dialog
-    if (showPinDialog) {
-        AdminPinDialog(
-            onDismiss = { showPinDialog = false },
-            onSuccess = {
-                showPinDialog = false
-                onToggleAdminMode(true)
-                onCloseDrawer()
+    // Sanitation FAQ Dialog
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showHelpDialog = false },
+            containerColor = DarkSurfaceCard,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.HelpOutline, contentDescription = null, tint = EcoGreenPrimary, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Waste Management & FAQ", color = EcoGreenLight, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    Text("1. Proper Waste Segregation:", fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, fontSize = 13.sp)
+                    Text("• Biodegradable: Food scraps, leaves, and garden waste for composting.\n• Non-Biodegradable / Residual: Plastics, wrappers, and non-recyclable packaging.\n• Recyclables: Clean paper, cardboard, glass bottles, and metal cans.\n• Hazardous: Batteries, chemicals, and electronic waste.", color = TextOnDarkSecondary, fontSize = 11.5.sp)
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("2. Collection Guidelines:", fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, fontSize = 13.sp)
+                    Text("• Place garbage bins or secure bags outside your residence on scheduled collection mornings.\n• Ensure waste is tightly secured to prevent stray animals from scattering garbage.", color = TextOnDarkSecondary, fontSize = 11.5.sp)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showHelpDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Got it", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
             }
         )
     }
-}
 
-@Composable
-fun AdminPinDialog(
-    onDismiss: () -> Unit,
-    onSuccess: () -> Unit
-) {
-    var pinInput by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = DarkSurface,
-        title = {
-            Text("Admin Access PIN Required", color = TextOnDarkPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        },
-        text = {
-            Column {
-                Text("Enter 4-digit administrative PIN code (Hint: 1234):", color = TextOnDarkSecondary, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = pinInput,
-                    onValueChange = {
-                        if (it.length <= 4) pinInput = it
-                        errorMessage = null
-                    },
-                    singleLine = true,
-                    placeholder = { Text("••••", color = TextOnDarkMuted) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = EcoGreenPrimary,
-                        unfocusedBorderColor = DarkBorder,
-                        focusedTextColor = TextOnDarkPrimary,
-                        unfocusedTextColor = TextOnDarkPrimary
-                    ),
+    // LGU Waste Office & Contact Info Dialog
+    if (showContactDialog) {
+        AlertDialog(
+            onDismissRequest = { showContactDialog = false },
+            containerColor = DarkSurfaceCard,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.PhoneInTalk, contentDescription = null, tint = EcoGreenPrimary, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("LGU Waste Office & Support", color = EcoGreenLight, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxWidth()
-                )
-                errorMessage?.let {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(it, color = HazardousRed, fontSize = 11.sp)
+                ) {
+                    Text("For inquiries, sanitation assistance, or reporting collection issues, contact the municipal waste office through:", color = TextOnDarkSecondary, fontSize = 12.sp)
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                        border = BorderStroke(1.dp, EcoGreenPrimary.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Email, contentDescription = null, tint = EcoGreenPrimary, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Gmail:", color = TextOnDarkMuted, fontSize = 11.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("HakotOfficial@gmail.com", color = EcoGreenLight, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Phone, contentDescription = null, tint = EcoGreenPrimary, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Hotline / Number:", color = TextOnDarkMuted, fontSize = 11.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("0999 500 3244", color = EcoGreenLight, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showContactDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Close", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (pinInput == "1234" || pinInput == "8888") {
-                        onSuccess()
-                    } else {
-                        errorMessage = "Incorrect PIN code (Hint: 1234)"
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
-            ) {
-                Text("Unlock Admin", color = Color.Black, fontWeight = FontWeight.Bold)
+        )
+    }
+
+    // Privacy & Anonymous Guarantee Dialog
+    if (showPrivacyDialog) {
+        AlertDialog(
+            onDismissRequest = { showPrivacyDialog = false },
+            containerColor = DarkSurfaceCard,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Security, contentDescription = null, tint = EcoGreenPrimary, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Privacy & Anonymous Guarantee", color = EcoGreenLight, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    Text("Why Hakot is Anonymous:", fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, fontSize = 13.sp)
+                    Text("Hakot is built on community trust and public sanitation reporting. We believe every citizen should be able to report overflowing bins, illegal dumping, or request assistance without fear of exposure, login friction, or personal data tracking.", color = TextOnDarkSecondary, fontSize = 11.5.sp)
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("How We Protect Your Privacy:", fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, fontSize = 13.sp)
+                    Text("• No Account Login Required: Citizens use the app instantly without signing up or providing personal credentials.\n• No Personal Tracking: Reports and interactions do not store or link your personal identity, phone numbers, or emails to public reports.\n• Secure Municipal Data: Only essential location and waste report data are processed by the local municipality sanitation department to dispatch collection trucks.", color = TextOnDarkSecondary, fontSize = 11.5.sp)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showPrivacyDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
+                ) {
+                    Text("Understood", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextOnDarkSecondary)
-            }
-        }
-    )
+        )
+    }
 }
 
 @Composable

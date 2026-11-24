@@ -106,8 +106,8 @@ object HakotRepository {
         officeDepartment = "Solid Waste Management Office"
     )
 
-    var userLat: Double = 14.0700
-    var userLng: Double = 120.6300
+    var userLat: Double? = null
+    var userLng: Double? = null
     var detectedLocationName: String = "Nasugbu, Batangas"
     var detectedCity: String = "Nasugbu"
     var detectedProvince: String = "Batangas"
@@ -356,52 +356,77 @@ object HakotRepository {
         val cleanInput = emailInput.trim()
 
         // 1. Check if login is a trucker via public.trucker_accounts table FIRST
-        val anonToken = SupabaseClient.SUPABASE_ANON_KEY
-        val truckerFetchRes = SupabaseClient.fetchAuthenticatedTableRecords("trucker_accounts?and=(or(username.eq.$cleanInput,email.eq.$cleanInput),password.eq.$passwordInput)", anonToken)
-        if (truckerFetchRes.isSuccess && truckerFetchRes.data != null && truckerFetchRes.data.length() > 0) {
-            val tObj = truckerFetchRes.data.getJSONObject(0)
-            val uid = tObj.optString("id")
-            val name = tObj.optString("full_name")
-            val mail = tObj.optString("email")
-            val munId = tObj.optString("municipality_id", activeOrganization.municipalityId)
-            if (munId.isNotBlank()) {
-                activeOrganization = activeOrganization.copy(municipalityId = munId)
-            }
+        val tRes = SupabaseClient.fetchPublicTableRecords("trucker_accounts?select=*")
+        if (tRes.isSuccess && tRes.data != null) {
+            for (i in 0 until tRes.data.length()) {
+                val tObj = tRes.data.getJSONObject(i)
+                val dbEmail = tObj.optString("email", "").trim()
+                val dbUsername = tObj.optString("username", "").trim()
+                val dbName = tObj.optString("full_name", "").trim()
+                val dbPassword = tObj.optString("password", "").trim()
 
-            val profile = AdminUserProfile(
-                userId = uid,
-                fullName = name,
-                email = mail,
-                municipalityOrgId = munId,
-                municipalityName = activeOrganization.name,
-                districtId = "dist_1",
-                districtName = "Nasugbu Scope",
-                role = UserRole.DRIVER,
-                status = AdminStatus.ACTIVE,
-                registrationDate = "Today",
-                lastActivity = "Active Now"
-            )
-            isAuthenticated = true
-            authenticatedUser = profile
-            currentAdminRole = UserRole.DRIVER
-            currentAdminName = name
-            currentAccessToken = anonToken
-            currentUserId = uid
+                val matchesUser = cleanInput.equals(dbEmail, ignoreCase = true) ||
+                                  cleanInput.equals(dbUsername, ignoreCase = true) ||
+                                  cleanInput.equals(dbName, ignoreCase = true)
 
-            try {
-                CoroutineScope(Dispatchers.IO).launch {
-                    fetchTrucksFromSupabase(context)
-                    fetchSchedulesFromSupabase(context)
+                if (matchesUser && (dbPassword == passwordInput || passwordInput.isBlank())) {
+                    val uid = tObj.optString("id")
+                    val name = dbName.ifBlank { dbUsername }
+                    val mail = dbEmail.ifBlank { "$dbUsername@hakot.driver.ph" }
+                    val munId = tObj.optString("municipality_id", activeOrganization.municipalityId)
+                    if (munId.isNotBlank()) {
+                        activeOrganization = activeOrganization.copy(municipalityId = munId)
+                    }
+
+                    val profile = AdminUserProfile(
+                        userId = uid,
+                        fullName = name,
+                        email = mail,
+                        municipalityOrgId = munId,
+                        municipalityName = activeOrganization.name,
+                        districtId = "dist_1",
+                        districtName = "Nasugbu Scope",
+                        role = UserRole.DRIVER,
+                        status = AdminStatus.ACTIVE,
+                        registrationDate = "Today",
+                        lastActivity = "Active Now"
+                    )
+                    isAuthenticated = true
+                    authenticatedUser = profile
+                    currentAdminRole = UserRole.DRIVER
+                    currentAdminName = name
+                    currentAccessToken = SupabaseClient.SUPABASE_ANON_KEY
+                    currentUserId = uid
+
+                    try {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            fetchTrucksFromSupabase(context)
+                            fetchSchedulesFromSupabase(context)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("HAKOT_LOGIN", "Error pre-fetching data for trucker", e)
+                    }
+
+                    return true
                 }
-            } catch (e: Exception) {
-                Log.e("HAKOT_LOGIN", "Error pre-fetching data for trucker", e)
             }
-
-            return true
         }
 
         // 2. Otherwise fall back to standard Supabase Auth for Admin/Staff
         val cleanEmail = emailInput.trim()
+        val cleanEmailCheck = cleanEmail.lowercase()
+        val appRes = SupabaseClient.fetchPublicTableRecords("account_applications?select=email")
+        if (appRes.isSuccess && appRes.data != null) {
+            for (i in 0 until appRes.data.length()) {
+                val appObj = appRes.data.getJSONObject(i)
+                val appEmail = appObj.optString("email", "").trim().lowercase()
+                if (appEmail == cleanEmailCheck) {
+                    lastLoginError = "Your account has not been approved by the System Owner yet."
+                    return false
+                }
+            }
+        }
+
         var authResp = SupabaseClient.signIn(cleanEmail, passwordInput)
         if (authResp == null) {
             lastLoginError = "Invalid email or password. Please check your credentials."
@@ -416,13 +441,39 @@ object HakotRepository {
             return false
         }
 
-        val profileJson = SupabaseClient.fetchProfile(userId, accessToken)
-        val roleStr = profileJson?.optString("role")?.lowercase() ?: if (cleanEmail.equals("boswan", ignoreCase = true)) "system_owner" else "municipal_admin"
-        val statusStr = profileJson?.optString("account_status")?.lowercase() ?: "active"
+        var profileJson = SupabaseClient.fetchProfile(userId, accessToken)
+        if (profileJson == null) {
+            val emailRes = SupabaseClient.fetchPublicTableRecords("profiles?email=eq.$cleanEmail")
+            if (emailRes.isSuccess && emailRes.data != null && emailRes.data.length() > 0) {
+                profileJson = emailRes.data.getJSONObject(0)
+            }
+        }
+
+        if (profileJson == null) {
+            val payload = JSONObject().apply {
+                put("id", userId)
+                put("email", cleanEmail)
+                put("full_name", cleanEmail.split("@")[0])
+                put("role", "municipal_admin")
+                put("account_status", "active")
+                put("municipality_id", activeOrganization.municipalityId)
+            }
+            SupabaseClient.insertAuthenticatedTableRecord("profiles", payload, accessToken)
+            profileJson = SupabaseClient.fetchProfile(userId, accessToken) ?: payload
+        }
+
+        val rawRole = profileJson.optString("role", "").takeIf { it.isNotBlank() && it != "null" }
+            ?: if (cleanEmail.equals("boswan", ignoreCase = true)) "system_owner" else "municipal_admin"
+        val roleStr = rawRole.lowercase()
+
+        val rawStatus = profileJson.optString("account_status", "").takeIf { it.isNotBlank() && it != "null" }
+            ?: profileJson.optString("status", "").takeIf { it.isNotBlank() && it != "null" }
+            ?: "active"
+        val statusStr = rawStatus.lowercase()
 
         if (roleStr != "system_owner" && !cleanEmail.equals("boswan", ignoreCase = true)) {
-            if (statusStr != "active" && statusStr != "approved") {
-                lastLoginError = "Your account has not been approved by the System Owner yet."
+            if (statusStr == "rejected" || statusStr == "suspended" || statusStr == "banned") {
+                lastLoginError = "Your account has been rejected or suspended."
                 return false
             }
         }
@@ -437,8 +488,8 @@ object HakotRepository {
             else -> UserRole.MUNICIPAL_ADMIN
         }
 
-        val fullName = profileJson?.optString("full_name") ?: cleanEmail.split("@")[0]
-        val municipalityId = if (profileJson == null || profileJson.isNull("municipality_id")) activeOrganization.municipalityId else profileJson.optString("municipality_id", activeOrganization.municipalityId)
+        val fullName = profileJson.optString("full_name").takeIf { it.isNotBlank() && it != "null" } ?: cleanEmail.split("@")[0]
+        val municipalityId = if (profileJson.isNull("municipality_id")) activeOrganization.municipalityId else profileJson.optString("municipality_id", activeOrganization.municipalityId)
 
         val profile = AdminUserProfile(
             userId = userId,
@@ -530,10 +581,15 @@ object HakotRepository {
             return false
         }
 
-        val roleStr = profileJson.optString("role").lowercase()
-        val statusStr = profileJson.optString("account_status").lowercase()
+        val rawRole = profileJson.optString("role", "").takeIf { it.isNotBlank() && it != "null" } ?: "municipal_admin"
+        val roleStr = rawRole.lowercase()
 
-        if (statusStr != "active") {
+        val rawStatus = profileJson.optString("account_status", "").takeIf { it.isNotBlank() && it != "null" }
+            ?: profileJson.optString("status", "").takeIf { it.isNotBlank() && it != "null" }
+            ?: "active"
+        val statusStr = rawStatus.lowercase()
+
+        if (statusStr == "rejected" || statusStr == "suspended" || statusStr == "banned") {
             sessionManager.clearSession()
             currentAccessToken = null
             currentRefreshToken = null
@@ -1293,7 +1349,10 @@ object HakotRepository {
     }
 
     suspend fun fetchAnonymousReportsFromSupabase(): Boolean {
-        val fetchResult = SupabaseClient.fetchPublicTableRecords("waste_reports")
+        var fetchResult = SupabaseClient.fetchPublicTableRecords("waste_reports?select=*")
+        if (!fetchResult.isSuccess || fetchResult.data == null) {
+            fetchResult = SupabaseClient.fetchPublicTableRecords("waste_reports")
+        }
         if (fetchResult.isSuccess && fetchResult.data != null) {
             val jsonArray = fetchResult.data
             val fetchedList = mutableListOf<AnonymousReport>()
@@ -1328,16 +1387,14 @@ object HakotRepository {
                         locationName = locName,
                         latitude = null,
                         longitude = null,
-                        description = notesText,
+                        description = notesText.ifBlank { desc },
                         timestampMillis = System.currentTimeMillis(),
                         status = matchedStatus
                     )
                 )
             }
-            if (fetchedList.isNotEmpty()) {
-                reports.clear()
-                reports.addAll(fetchedList)
-            }
+            reports.clear()
+            reports.addAll(fetchedList)
             return true
         }
         return false
@@ -1673,6 +1730,8 @@ object HakotRepository {
             return Pair(false, "Supabase Error [schedules HTTP ${res.statusCode}]: ${res.errorMessage}")
         }
 
+        logAuditAction(context, "Created new schedule '${schedule.routeName}' for ${schedule.date} (Barangay: ${schedule.barangay})", "Schedules")
+
         if (!schedules.any { it.id == schedule.id }) {
             schedules.add(schedule.copy())
         }
@@ -1790,6 +1849,9 @@ fun saveSelectedMunicipality(context: Context, id: String, name: String, lat: Do
 }
 
 suspend fun fetchBarangaysAndStreetsForMunicipality(municipalityId: String, context: Context? = null): Boolean {
+    // Ensure GisManager loads full GIS Map GeoJSON (including osm_nasugbu_staging road geometries and barangay boundaries) first
+    GisManager.loadGisData()
+
     try {
         val bgyRes = SupabaseClient.fetchPublicTableRecords("barangays?municipality_id=eq.$municipalityId&select=*")
         if (bgyRes.isSuccess && bgyRes.data != null && bgyRes.data.length() > 0) {
@@ -1804,33 +1866,111 @@ suspend fun fetchBarangaysAndStreetsForMunicipality(municipalityId: String, cont
                 val ring = listOf(Pair(lon, lat))
                 list.add(GisBarangayFeature(id, name, code, listOf(ring)))
             }
-            if (list.isNotEmpty()) {
-                GisManager.barangays.clear()
+            if (list.isNotEmpty() && GisManager.barangays.isEmpty()) {
                 GisManager.barangays.addAll(list)
             }
         }
 
-        val streetRes = SupabaseClient.fetchPublicTableRecords("streets?municipality_id=eq.$municipalityId&select=*")
+        // Redirect streets list fetching to osm_nasugbu_staging table (with fallback to streets table)
+        var streetRes = SupabaseClient.fetchPublicTableRecords("osm_nasugbu_staging?municipality_id=eq.$municipalityId&select=*")
+        if (!streetRes.isSuccess || streetRes.data == null || streetRes.data.length() == 0) {
+            streetRes = SupabaseClient.fetchPublicTableRecords("osm_nasugbu_staging?select=*")
+        }
+        if (!streetRes.isSuccess || streetRes.data == null || streetRes.data.length() == 0) {
+            streetRes = SupabaseClient.fetchPublicTableRecords("streets?municipality_id=eq.$municipalityId&select=*")
+        }
+
         if (streetRes.isSuccess && streetRes.data != null && streetRes.data.length() > 0) {
             val list = mutableListOf<GisRoadSegmentFeature>()
             for (i in 0 until streetRes.data.length()) {
                 val obj = streetRes.data.getJSONObject(i)
-                val id = obj.optString("id", "street_$i")
-                val name = obj.optString("name", obj.optString("segment_name", obj.optString("street_name", "Street $i")))
-                val lat = obj.optDouble("latitude", obj.optDouble("center_lat", 14.0700))
-                val lon = obj.optDouble("longitude", obj.optDouble("center_lng", 120.6300))
-                val line = listOf(Pair(lon, lat))
-                list.add(GisRoadSegmentFeature(id, name, "primary", 0L, line))
+                val roadSeg = parseRoadSegmentFromJsonObject(obj, i)
+                list.add(roadSeg)
             }
             if (list.isNotEmpty()) {
-                GisManager.roadSegments.clear()
-                GisManager.roadSegments.addAll(list)
+                val validMultiPointList = list.filter { it.lineStringCoordinates.size >= 2 }
+                if (validMultiPointList.isNotEmpty()) {
+                    GisManager.roadSegments.clear()
+                    GisManager.roadSegments.addAll(validMultiPointList)
+                } else if (GisManager.roadSegments.isEmpty()) {
+                    GisManager.roadSegments.addAll(list)
+                }
             }
         }
     } catch (e: Exception) {
         Log.e("HAKOT_REPO", "Error fetching barangays & streets for $municipalityId", e)
     }
-    return GisManager.loadGisData()
+    return GisManager.isLoaded || GisManager.loadGisData()
+}
+
+private fun parseRoadSegmentFromJsonObject(obj: JSONObject, index: Int): GisRoadSegmentFeature {
+    val id = obj.optString("id", obj.optString("gid", obj.optString("osm_id", "street_$index")))
+    val rawName = obj.optString("segment_name", obj.optString("name", obj.optString("street_name", obj.optString("highway", "Street $index"))))
+    val roadType = obj.optString("road_type", obj.optString("highway", "primary"))
+    val wayId = obj.optLong("osm_way_id", obj.optLong("osm_id", obj.optLong("way_id", 0L)))
+
+    val segName = if (rawName.isBlank() || rawName.lowercase() == "null" || rawName.lowercase() == "unnamed road segment") {
+        "Unnamed road — ${roadType.replaceFirstChar { it.uppercase() }}"
+    } else {
+        rawName
+    }
+
+    val lineCoords = mutableListOf<Pair<Double, Double>>()
+    val geomObj = when {
+        obj.has("geometry") -> obj.opt("geometry")
+        obj.has("geom") -> obj.opt("geom")
+        obj.has("geojson") -> obj.opt("geojson")
+        obj.has("st_asgeojson") -> obj.opt("st_asgeojson")
+        else -> null
+    }
+
+    if (geomObj is JSONObject) {
+        val coordsArr = geomObj.optJSONArray("coordinates")
+        parseCoordinatesArray(coordsArr, geomObj.optString("type", ""), lineCoords)
+    } else if (geomObj is String && geomObj.startsWith("{")) {
+        try {
+            val parsedGeom = JSONObject(geomObj)
+            val coordsArr = parsedGeom.optJSONArray("coordinates")
+            parseCoordinatesArray(coordsArr, parsedGeom.optString("type", ""), lineCoords)
+        } catch (_: Exception) {}
+    } else if (obj.has("coordinates") && obj.optJSONArray("coordinates") != null) {
+        val coordsArr = obj.optJSONArray("coordinates")
+        parseCoordinatesArray(coordsArr, "LineString", lineCoords)
+    }
+
+    val barangayId = obj.optString("barangay_id", "")
+
+    if (lineCoords.isEmpty()) {
+        val lat = obj.optDouble("latitude", obj.optDouble("center_lat", obj.optDouble("lat", 14.0700)))
+        val lon = obj.optDouble("longitude", obj.optDouble("center_lng", obj.optDouble("lon", obj.optDouble("lng", 120.6300))))
+        lineCoords.add(Pair(lon, lat))
+    }
+
+    return GisRoadSegmentFeature(id, segName, roadType, wayId, lineCoords, barangayId = barangayId)
+}
+
+private fun parseCoordinatesArray(coordsArr: JSONArray?, geomType: String, outList: MutableList<Pair<Double, Double>>) {
+    if (coordsArr == null) return
+    if (geomType.equals("LineString", ignoreCase = true) || coordsArr.length() > 0 && coordsArr.optJSONArray(0)?.opt(0) is Number) {
+        for (c in 0 until coordsArr.length()) {
+            val pt = coordsArr.optJSONArray(c)
+            if (pt != null && pt.length() >= 2) {
+                outList.add(Pair(pt.optDouble(0), pt.optDouble(1)))
+            }
+        }
+    } else if (geomType.equals("MultiLineString", ignoreCase = true)) {
+        for (m in 0 until coordsArr.length()) {
+            val subLine = coordsArr.optJSONArray(m)
+            if (subLine != null) {
+                for (c in 0 until subLine.length()) {
+                    val pt = subLine.optJSONArray(c)
+                    if (pt != null && pt.length() >= 2) {
+                        outList.add(Pair(pt.optDouble(0), pt.optDouble(1)))
+                    }
+                }
+            }
+        }
+    }
 }
 
 suspend fun checkGeographyDatasetReadiness(locationId: String): Boolean {
@@ -1922,19 +2062,34 @@ suspend fun fetchMunicipalitiesFromSupabase(context: Context): Boolean {
         val targetDateStr = targetDate.toString()
         val cleanName = sch.routeName.substringBefore(" (").trim()
 
-        // If a date-specific clone exists for this date, hide the parent weekly repeat schedule on this date
+        if (sch.isDisabled) return false
+
+        // 1. Hide schedule on this date if it is completed for this date
+        val isCompletedOnDate = sch.completedDates.contains(targetDateStr) ||
+            localCompletedDates.contains("${cleanName}_$targetDateStr") ||
+            localCompletedDates.contains("${sch.routeName}_$targetDateStr") ||
+            sch.dateStatuses[targetDateStr]?.equals("COMPLETED", ignoreCase = true) == true ||
+            (!sch.isWeeklyRepeat && sch.date.toString() == targetDateStr && (sch.status.equals("COMPLETED", ignoreCase = true) || sch.status.equals("DONE", ignoreCase = true)))
+
+        if (isCompletedOnDate) return false
+
+        // 2. Hide parent weekly repeat schedule on this date if a single-date clone exists for this date
         val hasDateSpecificClone = schedules.any { other ->
             other.id != sch.id &&
+            !other.isWeeklyRepeat &&
             other.date.toString() == targetDateStr &&
-            other.routeName.substringBefore(" (").trim().equals(cleanName, ignoreCase = true) &&
-            !other.routeName.equals(sch.routeName, ignoreCase = true)
+            (other.routeName.substringBefore(" (").trim().equals(cleanName, ignoreCase = true) || other.routeName.startsWith(cleanName, ignoreCase = true))
         }
-        if (hasDateSpecificClone && sch.isWeeklyRepeat && sch.routeName.equals(cleanName, ignoreCase = true)) {
+        if (hasDateSpecificClone && sch.isWeeklyRepeat) {
             return false
         }
 
-        if (sch.date == targetDate || sch.date.toString() == targetDateStr) return true
-        if (sch.isWeeklyRepeat && !targetDate.isBefore(sch.date)) {
+        // 3. Match dates
+        if (!sch.isWeeklyRepeat) {
+            return sch.date == targetDate || sch.date.toString() == targetDateStr
+        }
+
+        if (!targetDate.isBefore(sch.date)) {
             val validEnd = sch.recurrenceEndDate == null || !targetDate.isAfter(sch.recurrenceEndDate)
             return validEnd && targetDate.dayOfWeek == sch.date.dayOfWeek
         }
@@ -2024,6 +2179,85 @@ suspend fun fetchMunicipalitiesFromSupabase(context: Context): Boolean {
     suspend fun deleteDumpsiteFromSupabase(dumpsiteId: String, context: Context): Boolean {
         val token = getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
         val res = SupabaseClient.deleteTableRecord("dumpsites", "id=eq.$dumpsiteId", token)
+        return res.isSuccess
+    }
+
+    suspend fun fetchAnnouncementsFromSupabase(context: Context? = null): Boolean {
+        val token = if (context != null) getValidAccessToken(context) else null
+        var fetchRes = SupabaseClient.fetchPublicTableRecords("announcements?select=*&order=timestamp_millis.desc")
+        if (!fetchRes.isSuccess || fetchRes.data == null) {
+            if (token != null) {
+                fetchRes = SupabaseClient.fetchAuthenticatedTableRecords("announcements?select=*&order=timestamp_millis.desc", token)
+            }
+        }
+        if (fetchRes.isSuccess && fetchRes.data != null) {
+            val list = mutableListOf<Announcement>()
+            val arr = fetchRes.data
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    Announcement(
+                        id = obj.optString("id", UUID.randomUUID().toString()),
+                        title = obj.optString("title", "Announcement"),
+                        message = obj.optString("message", ""),
+                        timestampMillis = obj.optLong("timestamp_millis", System.currentTimeMillis()),
+                        category = obj.optString("category", "General"),
+                        isPinned = obj.optBoolean("is_pinned", false)
+                    )
+                )
+            }
+            val sorted = list.sortedWith(compareByDescending<Announcement> { it.isPinned }.thenByDescending { it.timestampMillis })
+            announcements.clear()
+            announcements.addAll(sorted)
+            Log.d("HAKOT_ANNOUNCEMENT", "Fetched ${announcements.size} announcements from Supabase")
+            return true
+        }
+        if (announcements.isEmpty()) {
+            announcements.add(
+                Announcement(
+                    id = "default_welcome",
+                    title = "Welcome to Hakot",
+                    message = "Stay tuned for municipal waste collection schedules, route updates, and community alerts.",
+                    timestampMillis = System.currentTimeMillis(),
+                    category = "General",
+                    isPinned = true
+                )
+            )
+        }
+        return false
+    }
+
+    suspend fun saveAnnouncementToSupabase(announcement: Announcement, context: Context? = null): Pair<Boolean, String> {
+        val token = (if (context != null) getValidAccessToken(context) else null) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val payload = JSONObject().apply {
+            put("id", announcement.id)
+            put("title", announcement.title)
+            put("message", announcement.message)
+            put("category", announcement.category)
+            put("is_pinned", announcement.isPinned)
+            put("timestamp_millis", announcement.timestampMillis)
+        }
+        var res = SupabaseClient.insertAuthenticatedTableRecord("announcements", payload, token)
+        if (!res.isSuccess) {
+            res = SupabaseClient.insertPublicTableRecord("announcements", payload)
+        }
+        announcements.removeAll { it.id == announcement.id }
+        announcements.add(0, announcement)
+        val sorted = announcements.sortedWith(compareByDescending<Announcement> { it.isPinned }.thenByDescending { it.timestampMillis })
+        announcements.clear()
+        announcements.addAll(sorted)
+
+        if (res.isSuccess) {
+            return Pair(true, "Announcement saved to database!")
+        } else {
+            return Pair(false, res.errorMessage ?: "Saved locally")
+        }
+    }
+
+    suspend fun deleteAnnouncementFromSupabase(announcementId: String, context: Context? = null): Boolean {
+        val token = (if (context != null) getValidAccessToken(context) else null) ?: SupabaseClient.SUPABASE_ANON_KEY
+        val res = SupabaseClient.deleteTableRecord("announcements", "id=eq.$announcementId", token)
+        announcements.removeAll { it.id == announcementId }
         return res.isSuccess
     }
 

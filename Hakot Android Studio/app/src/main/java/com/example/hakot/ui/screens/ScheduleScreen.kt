@@ -70,6 +70,7 @@ import com.example.hakot.ui.theme.EcoGreenPrimary
 import com.example.hakot.ui.theme.HazardousRed
 import com.example.hakot.ui.theme.HazardousRedContainer
 import com.example.hakot.ui.theme.SafetyOrange
+import com.example.hakot.ui.theme.RecycleYellow
 import com.example.hakot.ui.theme.TextOnDarkMuted
 import com.example.hakot.ui.theme.TextOnDarkPrimary
 import com.example.hakot.ui.theme.TextOnDarkSecondary
@@ -257,7 +258,7 @@ fun ScheduleScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (isMonthlyView) "Monthly Calendar View:" else "Weekly Calendar View:",
+                text = if (isMonthlyView) "31-Day Calendar View:" else "Weekly Calendar View:",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = TextOnDarkPrimary
@@ -269,7 +270,7 @@ fun ScheduleScreen(
                 border = BorderStroke(1.dp, DarkBorder)
             ) {
                 Text(
-                    text = if (isMonthlyView) "Switch to 7-Day" else "Switch to 14-Day",
+                    text = if (isMonthlyView) "Switch to 7-Day" else "Switch to 31-Day",
                     fontSize = 9.sp,
                     color = EcoGreenLight,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
@@ -279,7 +280,7 @@ fun ScheduleScreen(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        val daysRange = if (isMonthlyView) (-3..10) else (-2..4)
+        val daysRange = if (isMonthlyView) (0..30) else (-2..4)
         val daysWindow = remember(nowLocalDate, isMonthlyView) {
             daysRange.map { nowLocalDate.plusDays(it.toLong()) }
         }
@@ -468,11 +469,18 @@ fun ScheduleCardItem(schedule: ScheduleItem, onClick: () -> Unit = {}) {
                             )
                         }
                     } else {
+                        val statusColor = when {
+                            displayStatus.equals("ACTIVE", true) || displayStatus.equals("COMPLETED", true) || displayStatus.equals("FINISH", true) || displayStatus.equals("DONE", true) -> EcoGreenLight
+                            displayStatus.equals("UPCOMING", true) || displayStatus.equals("DRAFT", true) || displayStatus.equals("SCHEDULED", true) -> TextOnDarkSecondary
+                            displayStatus.equals("MISSED", true) -> HazardousRed
+                            displayStatus.equals("ON_HOLD", true) || displayStatus.equals("HOLD", true) -> RecycleYellow
+                            else -> TextOnDarkSecondary
+                        }
                         Text(
                             text = displayStatus,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = TextOnDarkSecondary
+                            color = statusColor
                         )
                     }
                 }
@@ -651,7 +659,14 @@ fun ScheduleDetailModal(schedule: ScheduleItem, onDismiss: () -> Unit) {
 
                 Column {
                     Text(text = "Status", fontSize = 10.sp, color = TextOnDarkSecondary)
-                    Text(text = displayStatus, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = SafetyOrange)
+                    val statusColor = when {
+                        displayStatus.equals("ACTIVE", true) || displayStatus.equals("COMPLETED", true) || displayStatus.equals("FINISH", true) || displayStatus.equals("DONE", true) -> EcoGreenLight
+                        displayStatus.equals("UPCOMING", true) || displayStatus.equals("DRAFT", true) || displayStatus.equals("SCHEDULED", true) -> TextOnDarkSecondary
+                        displayStatus.equals("MISSED", true) -> HazardousRed
+                        displayStatus.equals("ON_HOLD", true) || displayStatus.equals("HOLD", true) -> RecycleYellow
+                        else -> TextOnDarkSecondary
+                    }
+                    Text(text = displayStatus, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = statusColor)
                 }
 
                 if (schedule.dumpsiteName.isNotBlank()) {

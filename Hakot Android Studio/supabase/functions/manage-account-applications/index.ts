@@ -383,7 +383,7 @@ serve(async (req) => {
                     s.osm_way_id,
                     ST_AsGeoJSON(ST_Intersection(s.geometry, b.boundary))::JSON AS clipped_geojson
                 FROM public.street_segments s
-                LEFT JOIN public.streets st ON s.street_id = st.id
+                LEFT JOIN public.osm_nasugbu_staging st ON s.street_id = st.id
                 JOIN public.barangays b ON b.id = bgy_id
                 WHERE ST_Intersects(s.geometry, b.boundary)
                   AND NOT ST_IsEmpty(ST_Intersection(s.geometry, b.boundary));
@@ -405,8 +405,9 @@ serve(async (req) => {
 
     if (action === 'REGISTER_ORGANIZATION') {
       const { full_name, email, password, contact_number, municipality_id, office_department, organization_name, organization_type, cert_document_url } = body
+      const finalMunId = (municipality_id && municipality_id.trim() !== '') ? municipality_id : 'cb394eb7-a8b7-45f2-a314-3926baeab31f'
 
-      if (!full_name || !email || !password || !contact_number || !municipality_id || !office_department || !organization_name || !cert_document_url) {
+      if (!full_name || !email || !password || !contact_number || !office_department || !organization_name || !cert_document_url) {
         return new Response(JSON.stringify({ error: 'Missing required registration fields.' }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -455,7 +456,7 @@ serve(async (req) => {
           full_name,
           role: assignedRole,
           account_status: 'pending',
-          municipality_id
+          municipality_id: finalMunId
         })
 
       const { error: appErr } = await supabaseAdmin
@@ -465,7 +466,7 @@ serve(async (req) => {
           full_name,
           email: cleanEmail,
           contact_number,
-          municipality_id,
+          municipality_id: finalMunId,
           office_department,
           official_position: 'Administrator',
           requested_role: assignedRole,
@@ -557,14 +558,7 @@ serve(async (req) => {
 
       // 2. Securely enforce Admin role (municipal_admin); never allow system_owner via public registration
       const assignedRole = 'municipal_admin'
-
-      if (!claimedApp.municipality_id) {
-        await supabaseAdmin.from('account_applications').update({ status: 'PENDING' }).eq('id', applicationId)
-        return new Response(JSON.stringify({ error: 'Validation failed: Municipality scope ID is required for administrative accounts.' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
+      const finalMunId = (claimedApp.municipality_id && claimedApp.municipality_id.trim() !== '') ? claimedApp.municipality_id : 'cb394eb7-a8b7-45f2-a314-3926baeab31f'
 
       // 3. Generate activation code (6 digits) and expiry (15 mins)
       const activationCode = Math.floor(100000 + Math.random() * 900000).toString()
@@ -579,7 +573,7 @@ serve(async (req) => {
             auth_user_id: claimedApp.auth_user_id,
             organization_name: claimedApp.organization_name,
             organization_type: claimedApp.organization_type,
-            municipality_id: claimedApp.municipality_id,
+            municipality_id: finalMunId,
             full_name: claimedApp.full_name,
             email: claimedApp.email,
             contact_number: claimedApp.contact_number,
@@ -596,7 +590,7 @@ serve(async (req) => {
         console.warn("Verifieds table insertion exception:", vErr)
       }
 
-      // 5. Activate profile account status
+      // 5. Activate profile account status by both auth_user_id and email
       const { data: orgs } = await supabaseAdmin
         .from('organizations')
         .select('id')
@@ -604,16 +598,28 @@ serve(async (req) => {
 
       const orgId = claimedApp.organization_id || orgs?.[0]?.id || null
 
+      if (claimedApp.auth_user_id) {
+        await supabaseAdmin
+          .from('profiles')
+          .upsert({
+            id: claimedApp.auth_user_id,
+            full_name: claimedApp.full_name,
+            role: assignedRole,
+            account_status: 'active',
+            municipality_id: finalMunId,
+            organization_id: orgId
+          })
+      }
+
       await supabaseAdmin
         .from('profiles')
-        .upsert({
-          id: claimedApp.auth_user_id,
-          full_name: claimedApp.full_name,
+        .update({
           role: assignedRole,
           account_status: 'active',
-          municipality_id: claimedApp.municipality_id,
+          municipality_id: finalMunId,
           organization_id: orgId
         })
+        .ilike('email', claimedApp.email.trim())
 
       // 6. Permanently remove application record from account_applications
       await supabaseAdmin

@@ -23,7 +23,8 @@ data class GisRoadSegmentFeature(
     val osmWayId: Long,
     val lineStringCoordinates: List<Pair<Double, Double>>, // Original full geometry
     var clippedCoordinates: List<Pair<Double, Double>> = emptyList(), // Exact clipped geometry inside active barangay
-    var isReversed: Boolean = false // Traversal direction flag
+    var isReversed: Boolean = false, // Traversal direction flag
+    val barangayId: String = ""
 )
 
 object GisManager {
@@ -34,7 +35,7 @@ object GisManager {
     val roadSegments = mutableListOf<GisRoadSegmentFeature>()
 
     suspend fun loadGisData(): Boolean {
-        if (isLoaded && barangays.isNotEmpty() && roadSegments.isNotEmpty()) {
+        if (isLoaded && barangays.any { (it.polygonRings.firstOrNull()?.size ?: 0) >= 3 } && roadSegments.any { it.lineStringCoordinates.size >= 2 }) {
             return true
         }
 
@@ -159,12 +160,25 @@ object GisManager {
     // Get road segments intersecting selected barangay and compute exact clipped geometry inside boundary
     fun getRoadSegmentsInBarangay(barangayName: String): List<GisRoadSegmentFeature> {
         val bgy = barangays.find { it.name.equals(barangayName, ignoreCase = true) }
+            ?: barangays.find { it.name.contains(barangayName, ignoreCase = true) || barangayName.contains(it.name, ignoreCase = true) }
             ?: return emptyList()
+
+        // 1. Filter directly by barangayId foreign key matching bgy.id
+        val byBgyId = roadSegments.filter { it.barangayId.isNotBlank() && it.barangayId.equals(bgy.id, ignoreCase = true) }
+        if (byBgyId.isNotEmpty()) {
+            return byBgyId.map { road ->
+                if (road.clippedCoordinates.isEmpty()) road.copy(clippedCoordinates = road.lineStringCoordinates) else road
+            }
+        }
 
         if (bgy.polygonRings.isEmpty()) return emptyList()
 
         val results = mutableListOf<GisRoadSegmentFeature>()
         val primaryRing = bgy.polygonRings.firstOrNull() ?: return emptyList()
+
+        if (primaryRing.size < 3) {
+            return emptyList()
+        }
 
         for (road in roadSegments) {
             val clippedLines = clipLineStringToPolygon(road.lineStringCoordinates, primaryRing)
@@ -174,10 +188,40 @@ object GisManager {
                     val cloned = road.copy(clippedCoordinates = flatClipped)
                     results.add(cloned)
                 }
+            } else if (road.lineStringCoordinates.any { isPointInPolygon(it, primaryRing) }) {
+                val cloned = road.copy(clippedCoordinates = road.lineStringCoordinates)
+                results.add(cloned)
             }
         }
 
-        Log.d("HAKOT_GIS", "Barangay '${bgy.name}' returned ${results.size} clipped road segments.")
+        // If results are empty, check name matching first, then fallback to nearest 25 roads by centroid distance
+        if (results.isEmpty() && roadSegments.isNotEmpty()) {
+            val nameMatched = roadSegments.filter { it.segmentName.contains(barangayName, ignoreCase = true) || barangayName.contains(it.segmentName, ignoreCase = true) }
+            if (nameMatched.isNotEmpty()) {
+                for (road in nameMatched) {
+                    results.add(road.copy(clippedCoordinates = road.lineStringCoordinates))
+                }
+            } else {
+                val centerLon = primaryRing.map { it.first }.average()
+                val centerLat = primaryRing.map { it.second }.average()
+                val centerPt = Pair(centerLon, centerLat)
+
+                val nearbyRoads = roadSegments
+                    .map { road ->
+                        val minDist = road.lineStringCoordinates.minOfOrNull { haversineMeters(it, centerPt) } ?: Double.MAX_VALUE
+                        Pair(road, minDist)
+                    }
+                    .sortedBy { it.second }
+                    .take(25)
+                    .map { it.first }
+
+                for (road in nearbyRoads) {
+                    results.add(road.copy(clippedCoordinates = road.lineStringCoordinates))
+                }
+            }
+        }
+
+        Log.d("HAKOT_GIS", "Barangay '${bgy.name}' strictly returned ${results.size} road segments.")
         return results
     }
 

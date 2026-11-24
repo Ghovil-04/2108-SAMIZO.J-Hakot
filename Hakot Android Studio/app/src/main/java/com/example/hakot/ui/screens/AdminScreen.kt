@@ -110,6 +110,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -157,11 +159,14 @@ import com.example.hakot.model.AccountApplication
 import com.example.hakot.model.AccountInvitation
 import com.example.hakot.model.AdminStatus
 import com.example.hakot.model.AdminUserProfile
+import com.example.hakot.model.Announcement
 import com.example.hakot.model.AnonymousReport
 import com.example.hakot.model.ApplicationStatus
 import com.example.hakot.model.ReportStatus
 import com.example.hakot.model.TruckerAccount
 import com.example.hakot.model.UserRole
+import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.foundation.horizontalScroll
 import com.example.hakot.ui.theme.DarkBackground
 import com.example.hakot.ui.theme.DarkBorder
 import com.example.hakot.ui.theme.DarkSurface
@@ -242,14 +247,15 @@ fun AdminScreen(
         } else {
             val adminTabs = if (userRole == UserRole.SYSTEM_OWNER) {
                 listOf(
-                    "Account Management",
-                    "Account Applications",
-                    "Reset Password Request"
+                    "Accounts",
+                    "Applications",
+                    "Reset Requests"
                 )
             } else {
                 listOf(
                     "District Overview",
                     "Account Management",
+                    "Announcements",
                     "Collection Schedule",
                     "Schedule Audit",
                     "Dumpsites",
@@ -364,7 +370,9 @@ fun AdminScreen(
                                 onNavigateToApplications = { selectedAdminTab = 1 },
                                 onNavigateToResetRequests = { selectedAdminTab = 2 }
                             )
-                            1 -> SystemOwnerApplicationsReviewView()
+                            1 -> SystemOwnerApplicationsReviewView(
+                                onApproved = { selectedAdminTab = 0 }
+                            )
                             2 -> SystemOwnerPasswordResetRequestsView()
                             else -> AdminAccountManagementView(
                                 onOpenCreateModal = { showCreateAccountModal = true },
@@ -378,12 +386,13 @@ fun AdminScreen(
                             1 -> AdminAccountManagementView(
                                 onOpenCreateModal = { showCreateAccountModal = true }
                             )
-                            2 -> CollectionScheduleDashboardView(onNavigateToDumpsites = { selectedAdminTab = 4 })
-                            3 -> AdminScheduleAuditView()
-                            4 -> AdminDumpsitesView()
-                            5 -> AdminTrucksView()
-                            6 -> AdminReportsView()
-                            7 -> AdminAuditLogsView()
+                            2 -> AdminAnnouncementsView()
+                            3 -> CollectionScheduleDashboardView(onNavigateToDumpsites = { selectedAdminTab = 5 })
+                            4 -> AdminScheduleAuditView()
+                            5 -> AdminDumpsitesView()
+                            6 -> AdminTrucksView()
+                            7 -> AdminReportsView()
+                            8 -> AdminAuditLogsView()
                             else -> DistrictOverviewView()
                         }
                     }
@@ -410,7 +419,9 @@ fun AdminScreen(
 
 
 @Composable
-fun SystemOwnerApplicationsReviewView() {
+fun SystemOwnerApplicationsReviewView(
+    onApproved: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var isLoading by remember { mutableStateOf(false) }
@@ -663,6 +674,7 @@ fun SystemOwnerApplicationsReviewView() {
                                                     Log.d("HAKOT_APPROVAL_DEBUG", "8. UI updated: success message displayed")
                                                     Toast.makeText(context, "Application approved successfully!", Toast.LENGTH_SHORT).show()
                                                     selectedApplication = null
+                                                    onApproved()
                                                 } else {
                                                     errorMessage = res.second
                                                     Toast.makeText(context, "Approval failed: ${res.second}", Toast.LENGTH_LONG).show()
@@ -692,7 +704,6 @@ fun SystemOwnerApplicationsReviewView() {
 
     if (inspectCertPath != null) {
         val path = inspectCertPath!!
-        val certUrl = "${SupabaseClient.SUPABASE_URL}/storage/v1/object/authenticated/$path"
         val isImage = path.lowercase().endsWith(".png") || path.lowercase().endsWith(".jpg") || path.lowercase().endsWith(".jpeg")
         val isPdf = path.lowercase().endsWith(".pdf")
 
@@ -706,13 +717,7 @@ fun SystemOwnerApplicationsReviewView() {
                 withContext(Dispatchers.IO) {
                     try {
                         val token = HakotRepository.getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
-                        val conn = (URL(certUrl).openConnection() as HttpURLConnection).apply {
-                            requestMethod = "GET"
-                            setRequestProperty("apikey", SupabaseClient.SUPABASE_ANON_KEY)
-                            setRequestProperty("Authorization", "Bearer $token")
-                            connectTimeout = 15000
-                            readTimeout = 15000
-                        }
+                        val conn = openStorageConnection(path, token)
                         val bmp = BitmapFactory.decodeStream(conn.inputStream)
                         if (bmp != null) {
                             bitmap = bmp
@@ -742,115 +747,120 @@ fun SystemOwnerApplicationsReviewView() {
                     Text("Storage Path: $path", fontSize = 11.sp, color = TextOnDarkSecondary)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    if (isImage) {
-                        if (isLoadingImage) {
-                            CircularProgressIndicator(color = EcoGreenPrimary, modifier = Modifier.size(36.dp))
-                        } else if (loadError != null) {
-                            Text(loadError ?: "Error loading image", color = HazardousRed, fontSize = 12.sp)
-                        } else if (bitmap != null) {
-                            Image(
-                                bitmap = bitmap!!.asImageBitmap(),
-                                contentDescription = "Certificate Image",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(260.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                            )
+                    if (isImage && bitmap != null) {
+                        Image(
+                            bitmap = bitmap!!.asImageBitmap(),
+                            contentDescription = "Certificate Image",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(260.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    } else if (isImage && isLoadingImage) {
+                        CircularProgressIndicator(color = EcoGreenPrimary, modifier = Modifier.size(36.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                    } else if (loadError != null) {
+                        Text(loadError ?: "Error loading image", color = HazardousRed, fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+
+                    var isDownloadingFile by remember { mutableStateOf(false) }
+                    var fileError by remember { mutableStateOf<String?>(null) }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = "Document",
+                            tint = EcoGreenPrimary,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (isPdf) "PDF Document Certificate" else "Certificate Document File",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnDarkPrimary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        fileError?.let {
+                            Text(it, fontSize = 11.sp, color = HazardousRed, textAlign = TextAlign.Center)
+                            Spacer(modifier = Modifier.height(4.dp))
                         }
-                    } else if (isPdf) {
-                        var isDownloadingPdf by remember { mutableStateOf(false) }
-                        var pdfError by remember { mutableStateOf<String?>(null) }
 
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(imageVector = Icons.Default.Key, contentDescription = "PDF", tint = EcoGreenPrimary, modifier = Modifier.size(48.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("PDF Document Certificate", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            pdfError?.let {
-                                Text(it, fontSize = 11.sp, color = HazardousRed)
-                                Spacer(modifier = Modifier.height(4.dp))
-                            }
-
-                            Button(
-                                enabled = !isDownloadingPdf,
-                                onClick = {
-                                    scope.launch {
-                                        isDownloadingPdf = true
-                                        pdfError = null
-                                        try {
-                                            val token = HakotRepository.getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
-                                            val downloadedFile: File = withContext(Dispatchers.IO) {
-                                                val conn = (URL(certUrl).openConnection() as HttpURLConnection).apply {
-                                                    requestMethod = "GET"
-                                                    setRequestProperty("apikey", SupabaseClient.SUPABASE_ANON_KEY)
-                                                    setRequestProperty("Authorization", "Bearer $token")
-                                                    connectTimeout = 20000
-                                                    readTimeout = 20000
-                                                }
-                                                val code = conn.responseCode
-                                                if (code !in 200..299) {
-                                                    val errStr = try { conn.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
-                                                    conn.disconnect()
-                                                    throw Exception("HTTP $code: ${errStr ?: "Server returned error"}")
-                                                }
-
-                                                val file = File(context.cacheDir, "certificate_preview.pdf")
-                                                file.outputStream().use { out ->
-                                                    conn.inputStream.copyTo(out)
-                                                }
+                        Button(
+                            enabled = !isDownloadingFile,
+                            onClick = {
+                                scope.launch {
+                                    isDownloadingFile = true
+                                    fileError = null
+                                    try {
+                                        val token = HakotRepository.getValidAccessToken(context) ?: SupabaseClient.SUPABASE_ANON_KEY
+                                        val downloadedFile: File = withContext(Dispatchers.IO) {
+                                            val conn = openStorageConnection(path, token)
+                                            val code = conn.responseCode
+                                            if (code !in 200..299) {
+                                                val errStr = try { conn.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
                                                 conn.disconnect()
-
-                                                if (!file.exists() || file.length() < 10) {
-                                                    file.delete()
-                                                    throw Exception("Downloaded PDF file is empty or incomplete.")
-                                                }
-
-                                                val headerBytes = ByteArray(4)
-                                                file.inputStream().use { stream ->
-                                                    stream.read(headerBytes)
-                                                }
-                                                val headerStr = String(headerBytes, Charsets.US_ASCII)
-                                                if (headerStr != "%PDF") {
-                                                    file.delete()
-                                                    throw Exception("Downloaded file is not a valid PDF document.")
-                                                }
-
-                                                file
+                                                throw Exception("HTTP $code: ${errStr ?: "Server returned error"}")
                                             }
 
-                                            val contentUri = FileProvider.getUriForFile(
-                                                context,
-                                                "${context.packageName}.fileprovider",
-                                                downloadedFile
-                                            )
-
-                                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                setDataAndType(contentUri, "application/pdf")
-                                                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                                            val ext = path.substringAfterLast('.', "dat")
+                                            val file = File(context.cacheDir, "certificate_preview_${System.currentTimeMillis()}.$ext")
+                                            file.outputStream().use { out ->
+                                                conn.inputStream.copyTo(out)
                                             }
-                                            context.startActivity(intent)
-                                        } catch (e: Exception) {
-                                            pdfError = "Failed to download/open PDF: ${e.message}"
-                                        } finally {
-                                            isDownloadingPdf = false
+                                            conn.disconnect()
+
+                                            if (!file.exists() || file.length() == 0L) {
+                                                file.delete()
+                                                throw Exception("Downloaded file is empty or incomplete.")
+                                            }
+                                            file
                                         }
+
+                                        val mimeType = when {
+                                            path.lowercase().endsWith(".pdf") -> "application/pdf"
+                                            path.lowercase().endsWith(".png") -> "image/png"
+                                            path.lowercase().endsWith(".jpg") || path.lowercase().endsWith(".jpeg") -> "image/jpeg"
+                                            else -> "*/*"
+                                        }
+
+                                        val contentUri = FileProvider.getUriForFile(
+                                            context,
+                                            "${context.packageName}.fileprovider",
+                                            downloadedFile
+                                        )
+
+                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                            setDataAndType(contentUri, mimeType)
+                                            flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        fileError = "Failed to download/open file: ${e.message}"
+                                    } finally {
+                                        isDownloadingFile = false
                                     }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                if (isDownloadingPdf) {
-                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Downloading...", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                } else {
-                                    Text("Open PDF Document", color = Color.Black, fontWeight = FontWeight.Bold)
                                 }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (isDownloadingFile) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Opening...", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            } else {
+                                Text(
+                                    text = if (isPdf) "Open PDF Document" else "Open / View Certificate File",
+                                    color = Color.Black,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
-                    } else {
-                        Text("Document format not previewable directly.", fontSize = 12.sp, color = TextOnDarkSecondary)
                     }
                 }
             },
@@ -1500,11 +1510,12 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
         else -> if (selectedDay != null) "FOR $selectedDay" else "ALL SCHEDULES"
     }
 
+       val targetDriverDay = selectedDay ?: today
     val driverSchedules = allDriverSchedules.filter { sch ->
         val matchesDay = if (driverSubTab != 0) {
             true
         } else {
-            (selectedDay == null || HakotRepository.isScheduleActiveOnDate(sch, selectedDay!!)) && !hiddenCompletedFromDayViewIds.contains(sch.id)
+            HakotRepository.isScheduleActiveOnDate(sch, targetDriverDay) && !hiddenCompletedFromDayViewIds.contains(sch.id)
         }
         val matchesTab = when (driverSubTab) {
             1 -> unassignedSchedules.contains(sch)
@@ -1516,10 +1527,10 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
         }
         matchesDay && matchesTab
     }.filterNot { sch ->
-        sch.isWeeklyRepeat && selectedDay != null && allDriverSchedules.any { other ->
+        sch.isWeeklyRepeat && allDriverSchedules.any { other ->
             !other.isWeeklyRepeat &&
-            other.date == selectedDay &&
-            (other.routeName == "${sch.routeName} ($selectedDay)" || other.routeName == sch.routeName || other.routeName.startsWith(sch.routeName))
+            other.date == targetDriverDay &&
+            (other.routeName == "${sch.routeName} ($targetDriverDay)" || other.routeName == sch.routeName || other.routeName.startsWith(sch.routeName))
         }
     }
 
@@ -1550,6 +1561,7 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(
+                            modifier = Modifier.weight(1f),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -1559,10 +1571,25 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                     .background(HazardousRed, CircleShape)
                             )
                             Column {
-                                Text("🔴 LIVE GPS LOCATION BROADCASTING", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = HazardousRed)
-                                Text("Lat: ${String.format("%.4f", broadcastLiveLat)}° N • Lon: ${String.format("%.4f", broadcastLiveLon)}° E", fontSize = 10.sp, color = TextOnDarkSecondary)
+                                Text(
+                                    text = "🔴 LIVE GPS LOCATION BROADCASTING",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = HazardousRed,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "Lat: ${String.format("%.4f", broadcastLiveLat)}° N • Lon: ${String.format("%.4f", broadcastLiveLon)}° E",
+                                    fontSize = 10.sp,
+                                    color = TextOnDarkSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
+
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         Button(
                             onClick = {
@@ -1578,7 +1605,14 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                             shape = RoundedCornerShape(12.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                         ) {
-                            Text("Stop Sharing", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            Text(
+                                text = "Stop Sharing",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
                         }
                     }
                 }
@@ -1598,10 +1632,19 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("TRUCK DRIVER PORTAL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-                            Text(driver?.fullName ?: "Driver", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary)
+                            Text(
+                                text = driver?.fullName ?: "Driver",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextOnDarkPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
+
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         val hasAssignedOrActiveSchedule = HakotRepository.schedules.any { sch ->
                             sch.operational && (sch.status.equals("ASSIGNED", ignoreCase = true) || sch.status.equals("ACTIVE", ignoreCase = true))
@@ -1619,10 +1662,12 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text(
-                                    "Broadcast GPS",
+                                    text = "Broadcast GPS",
                                     color = if (hasAssignedOrActiveSchedule) Color.Black else TextOnDarkSecondary,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 10.sp
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
 
@@ -1632,7 +1677,14 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                                 shape = RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("Sign Out", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                                Text(
+                                    text = "Sign Out",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
                             }
                         }
                     }
@@ -1742,7 +1794,7 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         daysOfWeek.forEach { day ->
                             val isSelected = selectedDay == day
                             val hasSchedules = HakotRepository.schedules.any {
@@ -1752,13 +1804,15 @@ fun DriverDashboardView(onSignOut: () -> Unit) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
+                                    .weight(1f)
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (isSelected) EcoGreenPrimary else if (hasSchedules) EcoGreenContainer else DarkSurface)
                                     .clickable { 
                                         selectedDay = if (isSelected) null else day 
                                         driverSubTab = 0
                                     }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .padding(vertical = 8.dp),
+                                verticalArrangement = Arrangement.Center
                             ) {
                                 Text(day.dayOfWeek.name.take(3), fontSize = 10.sp, color = if (isSelected) Color.Black else TextOnDarkSecondary)
                                 Text("${day.dayOfMonth}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (isSelected) Color.Black else TextOnDarkPrimary)
@@ -2462,14 +2516,34 @@ fun MetricCard(
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(12.dp),
         border = BorderStroke(1.dp, DarkBorder),
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Text(title, fontSize = 10.sp, color = TextOnDarkMuted)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(value, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = color)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = title,
+                fontSize = 9.5.sp,
+                color = TextOnDarkMuted,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = value,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                maxLines = 1,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -2543,11 +2617,6 @@ fun DistrictOverviewView() {
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextOnDarkPrimary
-                    )
-                    Text(
-                        text = "Gmail: ${admin.email}",
-                        fontSize = 12.sp,
-                        color = TextOnDarkSecondary
                     )
                     Text(
                         text = "Municipality: $resolvedMunicipality",
@@ -2763,12 +2832,18 @@ fun AdminAccountManagementView(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .weight(1f)
+                                .height(72.dp)
                                 .border(1.dp, EcoGreenPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("Applicants", fontSize = 11.sp, color = TextOnDarkSecondary)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("$applicantsCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = RecycleYellow)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text("Applicants", fontSize = 11.sp, color = TextOnDarkSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text("$applicantsCount", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = RecycleYellow)
                             }
                         }
 
@@ -2777,12 +2852,18 @@ fun AdminAccountManagementView(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .weight(1f)
+                                .height(72.dp)
                                 .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("Active Accounts", fontSize = 11.sp, color = TextOnDarkSecondary)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("$activeAccountsCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text("Active Accounts", fontSize = 11.sp, color = TextOnDarkSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text("$activeAccountsCount", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
                             }
                         }
 
@@ -2792,12 +2873,18 @@ fun AdminAccountManagementView(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .weight(1f)
+                                .height(72.dp)
                                 .border(1.dp, EcoGreenPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("Reset Password Request", fontSize = 10.sp, color = TextOnDarkSecondary, maxLines = 1)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("$resetRequestsCount", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = HazardousRed)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text("Reset Requests", fontSize = 11.sp, color = TextOnDarkSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text("$resetRequestsCount", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = HazardousRed)
                             }
                         }
                     }
@@ -3465,6 +3552,7 @@ fun MapRoutePlannerScreen(
     onSaveScheduledRoute: (String, String, String, LocalDate, LocalTime, LocalTime, String, Boolean, LocalDate?, List<GisRoadSegmentFeature>, String) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var isGisLoading by remember { mutableStateOf(!GisManager.isLoaded) }
     var selectedDumpsiteName by remember { mutableStateOf(HakotRepository.dumpsites.firstOrNull()?.name ?: "no dumpsite") }
 
@@ -4039,6 +4127,9 @@ fun MapRoutePlannerScreen(
                                     selectedGisSegments,
                                     selectedDumpsiteName
                                 )
+                                scope.launch {
+                                    HakotRepository.fetchSchedulesFromSupabase(context)
+                                }
                                 showReviewDialog = false
                                 onDismiss()
                             } catch (e: Exception) {
@@ -4120,8 +4211,9 @@ fun CollectionScheduleDashboardView(
         else -> if (adminSelectedDay != null) "FOR $adminSelectedDay" else "ALL SCHEDULES"
     }
 
+    val targetAdminDay = adminSelectedDay ?: today
     val schedulesForSelectedDay = allAdminSchedules.filter { sch ->
-        val matchesDay = if (adminScheduleSubTab != 0) true else (adminSelectedDay == null || HakotRepository.isScheduleActiveOnDate(sch, adminSelectedDay!!))
+        val matchesDay = if (adminScheduleSubTab != 0) true else HakotRepository.isScheduleActiveOnDate(sch, targetAdminDay)
         val matchesTab = when (adminScheduleSubTab) {
             1 -> adminDrafts.contains(sch)
             2 -> adminAssigned.contains(sch)
@@ -4131,6 +4223,12 @@ fun CollectionScheduleDashboardView(
             else -> true
         }
         matchesDay && matchesTab
+    }.filterNot { sch ->
+        sch.isWeeklyRepeat && adminScheduleSubTab == 0 && allAdminSchedules.any { other ->
+            !other.isWeeklyRepeat &&
+            other.date == targetAdminDay &&
+            (other.routeName == "${sch.routeName} ($targetAdminDay)" || other.routeName == sch.routeName || other.routeName.startsWith(sch.routeName))
+        }
     }
 
     if (showSchedulePlanner) {
@@ -4280,7 +4378,7 @@ fun CollectionScheduleDashboardView(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     daysOfWeek.forEach { day ->
                         val isSelected = day == adminSelectedDay
                         val hasSchedules = HakotRepository.schedules.any {
@@ -4290,13 +4388,15 @@ fun CollectionScheduleDashboardView(
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
+                                .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isSelected) EcoGreenPrimary else if (hasSchedules) EcoGreenContainer else DarkSurface)
                                 .clickable { 
                                     adminSelectedDay = if (adminSelectedDay == day) null else day
                                     adminScheduleSubTab = 0
                                 }
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .padding(vertical = 8.dp),
+                            verticalArrangement = Arrangement.Center
                         ) {
                             Text(day.dayOfWeek.name.take(3), fontSize = 10.sp, color = if (isSelected) Color.Black else TextOnDarkSecondary)
                             Text("${day.dayOfMonth}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (isSelected) Color.Black else TextOnDarkPrimary)
@@ -4814,9 +4914,11 @@ fun AdminTrucksView() {
     var selectedTruckerForDelete by remember { mutableStateOf<TruckerAccount?>(null) }
 
     val municipalitySlug = HakotRepository.activeOrganization.assignedMunicipality
+        .substringBefore(",")
         .lowercase()
         .replace(" ", "")
         .replace(Regex("[^a-z0-9]"), "")
+        .let { if (it.contains("nasugbu")) "nasugbu" else it }
         .ifBlank { "nasugbu" }
 
     LaunchedEffect(Unit) {
@@ -5205,7 +5307,7 @@ fun AdminTrucksView() {
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
                 ) {
-                    Text("Save to Database", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("Save", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -5310,7 +5412,7 @@ fun AdminTrucksView() {
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary)
                 ) {
-                    Text("Save to Database", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("Save", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -5329,29 +5431,12 @@ fun AdminTrucksView() {
 fun AdminReportsView() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var selectedReportForDetail by remember { mutableStateOf<AnonymousReport?>(null) }
-    var selectedStatusFilter by remember { mutableStateOf("ALL") }
-    val assignedMunicipality = HakotRepository.activeOrganization.assignedMunicipality
 
     LaunchedEffect(Unit) {
         HakotRepository.fetchAnonymousReportsFromSupabase()
     }
 
-    val municipalityReports = HakotRepository.reports.filter { rep ->
-        val matchesMunicipality = assignedMunicipality.isBlank() ||
-            rep.locationName.contains(assignedMunicipality, ignoreCase = true) ||
-            rep.description.contains(assignedMunicipality, ignoreCase = true)
-
-        val matchesStatus = when (selectedStatusFilter) {
-            "PENDING" -> rep.status == ReportStatus.SUBMITTED || rep.status == ReportStatus.RECEIVED
-            "UNDER_REVIEW" -> rep.status == ReportStatus.UNDER_REVIEW
-            "RESOLVED" -> rep.status == ReportStatus.RESOLVED
-            "REJECTED" -> rep.status == ReportStatus.REJECTED
-            else -> true
-        }
-
-        matchesMunicipality && matchesStatus
-    }
+    val reportsList = HakotRepository.reports
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -5359,33 +5444,10 @@ fun AdminReportsView() {
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Text("Citizen Waste Reports Management", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = EcoGreenLight)
-            Text("Assigned Scope: ${assignedMunicipality.ifBlank { "All Municipalities" }}", fontSize = 11.sp, color = TextOnDarkSecondary)
+            Text("Total Submitted Reports (${reportsList.size})", fontSize = 11.sp, color = TextOnDarkSecondary)
         }
 
-        // Status Filter Chips
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            val statusFilters = listOf("ALL" to "All", "PENDING" to "Pending", "UNDER_REVIEW" to "Under Review", "RESOLVED" to "Resolved", "REJECTED" to "Rejected")
-            statusFilters.forEach { (key, label) ->
-                val isSelected = selectedStatusFilter == key
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { selectedStatusFilter = key },
-                    label = { Text(label, fontSize = 10.5.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = EcoGreenContainer,
-                        selectedLabelColor = EcoGreenLight,
-                        containerColor = DarkSurfaceCard,
-                        labelColor = TextOnDarkSecondary
-                    ),
-                    modifier = Modifier.height(32.dp)
-                )
-            }
-        }
-
-        if (municipalityReports.isEmpty()) {
+        if (reportsList.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -5409,7 +5471,7 @@ fun AdminReportsView() {
                             color = TextOnDarkPrimary
                         )
                         Text(
-                            text = "No citizen reports matching filter for ${assignedMunicipality.ifBlank { "your municipality" }}.",
+                            text = "No citizen waste reports currently in database.",
                             fontSize = 11.sp,
                             color = TextOnDarkSecondary,
                             textAlign = TextAlign.Center
@@ -5423,20 +5485,12 @@ fun AdminReportsView() {
                 contentPadding = PaddingValues(bottom = 20.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                items(municipalityReports) { rep ->
-                    val statusColor = when (rep.status) {
-                        ReportStatus.RESOLVED -> EcoGreenPrimary
-                        ReportStatus.REJECTED -> HazardousRed
-                        ReportStatus.UNDER_REVIEW -> SafetyOrange
-                        else -> RecycleYellow
-                    }
-
+                items(reportsList) { rep ->
                     Card(
                         colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { selectedReportForDetail = rep }
                             .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
@@ -5459,14 +5513,22 @@ fun AdminReportsView() {
                                     )
                                 }
 
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(statusColor.copy(alpha = 0.2f))
-                                        .border(1.dp, statusColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            val success = HakotRepository.resolveCitizenReport(rep.id, context)
+                                            if (success) {
+                                                Toast.makeText(context, "Report resolved & deleted from database.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Failed to resolve report.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                                 ) {
-                                    Text(rep.status.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = statusColor)
+                                    Text("Resolve ✕", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
                                 }
                             }
 
@@ -5482,58 +5544,25 @@ fun AdminReportsView() {
                                 Text(
                                     text = rep.description,
                                     fontSize = 11.sp,
-                                    color = TextOnDarkSecondary,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
+                                    color = TextOnDarkSecondary
                                 )
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val timeFormatted = try {
-                                    val instant = Instant.ofEpochMilli(rep.timestampMillis)
-                                    val zdt = ZonedDateTime.ofInstant(instant, ZoneId.systemDefault())
-                                    zdt.format(DateTimeFormatter.ofPattern("MMM dd, yyyy • hh:mm a"))
-                                } catch (e: Exception) {
-                                    "Submitted recently"
-                                }
-                                Text(text = timeFormatted, fontSize = 9.5.sp, color = TextOnDarkMuted)
-
-                                Button(
-                                    onClick = { selectedReportForDetail = rep },
-                                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
-                                    shape = RoundedCornerShape(6.dp),
-                                    border = BorderStroke(1.dp, DarkBorder),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                    modifier = Modifier.height(28.dp)
-                                ) {
-                                    Text("View Details & Status →", fontSize = 10.sp, color = EcoGreenLight, fontWeight = FontWeight.Bold)
-                                }
+                            val timeFormatted = try {
+                                val instant = Instant.ofEpochMilli(rep.timestampMillis)
+                                val zdt = ZonedDateTime.ofInstant(instant, ZoneId.systemDefault())
+                                zdt.format(DateTimeFormatter.ofPattern("MMM dd, yyyy • hh:mm a"))
+                            } catch (e: Exception) {
+                                "Submitted recently"
                             }
+                            Text(text = timeFormatted, fontSize = 9.5.sp, color = TextOnDarkMuted)
                         }
                     }
                 }
             }
         }
-    }
-
-    selectedReportForDetail?.let { rep ->
-        AdminReportDetailDialog(
-            report = rep,
-            onDismiss = { selectedReportForDetail = null },
-            onStatusUpdated = { newStatus ->
-                scope.launch {
-                    HakotRepository.updateReportStatus(rep.id, newStatus, "")
-                    selectedReportForDetail = null
-                    Toast.makeText(context, "Report status updated to ${newStatus.label}", Toast.LENGTH_SHORT).show()
-                }
-            }
-        )
     }
 }
 
@@ -5932,7 +5961,7 @@ fun AccountRegistrationScreen(
                             Text(
                                 "Your organization account application has been submitted and is currently PENDING System Owner review. You will receive an email activation code once approved.",
                                 fontSize = 12.sp,
-                                color = TextOnDarkSecondary,
+                                color = TextOnDarkPrimary,
                                 textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(16.dp))
@@ -5970,7 +5999,7 @@ fun AccountRegistrationScreen(
                     Text("Organization Type:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextOnDarkPrimary, modifier = Modifier.align(Alignment.Start))
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterChip(
@@ -6291,12 +6320,19 @@ fun AccountRegistrationScreen(
                         enabled = !isSubmitting,
                         colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
                         shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                        modifier = Modifier.fillMaxWidth().height(56.dp)
                     ) {
                         if (isSubmitting) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.Black, strokeWidth = 2.5.dp)
                         } else {
-                            Text("SUBMIT ORGANIZATION APPLICATION", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                text = "SUBMIT ORGANIZATION APPLICATION",
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2
+                            )
                         }
                     }
                 }
@@ -7128,5 +7164,474 @@ fun AdminScheduleAuditView() {
         }
     }
 }
+
+@Composable
+fun AdminAnnouncementsView() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var showAddModal by remember { mutableStateOf(false) }
+    var titleInput by remember { mutableStateOf("") }
+    var messageInput by remember { mutableStateOf("") }
+    var categoryInput by remember { mutableStateOf("General") }
+    var isPinnedInput by remember { mutableStateOf(false) }
+
+    var isSubmitting by remember { mutableStateOf(false) }
+    var successMsg by remember { mutableStateOf<String?>(null) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var announcementToDelete by remember { mutableStateOf<Announcement?>(null) }
+
+    val categories = listOf("General", "Urgent", "Schedule Change", "Maintenance", "Community Alert")
+
+    LaunchedEffect(Unit) {
+        HakotRepository.fetchAnnouncementsFromSupabase(context)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Top Header Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, DarkBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Municipal Announcements",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = EcoGreenLight
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Publish announcements and running ticker updates to citizen mobile screens",
+                        fontSize = 11.sp,
+                        color = TextOnDarkSecondary
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Button(
+                    onClick = { showAddModal = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add", tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("New Announcement", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        if (successMsg != null) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = EcoGreenPrimary.copy(alpha = 0.15f)),
+                border = BorderStroke(1.dp, EcoGreenPrimary),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = successMsg!!,
+                    color = EcoGreenPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(10.dp),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        if (errorMsg != null) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = HazardousRed.copy(alpha = 0.15f)),
+                border = BorderStroke(1.dp, HazardousRed),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = errorMsg!!,
+                    color = HazardousRed,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(10.dp),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        // Active Announcements List or Centered Empty State
+        if (HakotRepository.announcements.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, EcoGreenPrimary.copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp, horizontal = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Campaign,
+                            contentDescription = null,
+                            tint = EcoGreenPrimary,
+                            modifier = Modifier.size(44.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "No announcements published yet.",
+                            fontSize = 13.sp,
+                            color = TextOnDarkSecondary,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = { showAddModal = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "CREATE ANNOUNCEMENT",
+                                color = Color.Black,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            HakotRepository.announcements.forEach { item ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, if (item.isPinned) EcoGreenPrimary else DarkBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                // Category Tag
+                                val catBg = when (item.category.lowercase()) {
+                                    "urgent" -> HazardousRed.copy(alpha = 0.2f)
+                                    "schedule change" -> Color(0xFFFF9800).copy(alpha = 0.2f)
+                                    else -> EcoGreenPrimary.copy(alpha = 0.2f)
+                                }
+                                val catTxt = when (item.category.lowercase()) {
+                                    "urgent" -> HazardousRed
+                                    "schedule change" -> Color(0xFFFF9800)
+                                    else -> EcoGreenPrimary
+                                }
+                                Surface(
+                                    color = catBg,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = item.category.uppercase(),
+                                        color = catTxt,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+
+                                if (item.isPinned) {
+                                    Surface(
+                                        color = EcoGreenPrimary.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "📌 PINNED",
+                                            color = EcoGreenPrimary,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { announcementToDelete = item },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = HazardousRed,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = item.title,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnDarkPrimary
+                        )
+
+                        Text(
+                            text = item.message,
+                            fontSize = 12.sp,
+                            color = TextOnDarkSecondary,
+                            lineHeight = 16.sp
+                        )
+
+                        val formattedDate = remember(item.timestampMillis) {
+                            SimpleDateFormat("MMM dd, yyyy • hh:mm a", Locale.getDefault()).format(
+                                Date(item.timestampMillis)
+                            )
+                        }
+                        Text(
+                            text = "Published: $formattedDate",
+                            fontSize = 10.sp,
+                            color = TextOnDarkMuted
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Modal to Add Announcement
+    if (showAddModal) {
+        AlertDialog(
+            onDismissRequest = { showAddModal = false },
+            containerColor = DarkSurfaceCard,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Campaign, contentDescription = null, tint = EcoGreenPrimary, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Publish Announcement", color = EcoGreenLight, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = titleInput,
+                        onValueChange = { titleInput = it },
+                        label = { Text("Announcement Title", fontSize = 11.sp) },
+                        placeholder = { Text("e.g. Garbage Collection Delay in Barangay 4", fontSize = 11.sp) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedLabelColor = EcoGreenPrimary,
+                            unfocusedLabelColor = TextOnDarkMuted,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = messageInput,
+                        onValueChange = { messageInput = it },
+                        label = { Text("Announcement Message / Details", fontSize = 11.sp) },
+                        placeholder = { Text("Write full notice details here...", fontSize = 11.sp) },
+                        minLines = 3,
+                        maxLines = 5,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = EcoGreenPrimary,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedLabelColor = EcoGreenPrimary,
+                            unfocusedLabelColor = TextOnDarkMuted,
+                            focusedTextColor = TextOnDarkPrimary,
+                            unfocusedTextColor = TextOnDarkPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Text("Category:", fontSize = 11.sp, color = TextOnDarkSecondary, fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        categories.forEach { cat ->
+                            FilterChip(
+                                selected = categoryInput == cat,
+                                onClick = { categoryInput = cat },
+                                label = { Text(cat, fontSize = 10.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = EcoGreenPrimary,
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = DarkSurface,
+                                    labelColor = TextOnDarkSecondary
+                                )
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { isPinnedInput = !isPinnedInput }
+                    ) {
+                        Checkbox(
+                            checked = isPinnedInput,
+                            onCheckedChange = { isPinnedInput = it },
+                            colors = CheckboxDefaults.colors(checkedColor = EcoGreenPrimary)
+                        )
+                        Text("Pin this announcement to top", fontSize = 11.sp, color = TextOnDarkPrimary)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (titleInput.isBlank() || messageInput.isBlank()) {
+                            Toast.makeText(context, "Please fill in both title and message", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        isSubmitting = true
+                        scope.launch {
+                            val newAnno = Announcement(
+                                id = UUID.randomUUID().toString(),
+                                title = titleInput.trim(),
+                                message = messageInput.trim(),
+                                category = categoryInput,
+                                isPinned = isPinnedInput,
+                                timestampMillis = System.currentTimeMillis()
+                            )
+                            val res = HakotRepository.saveAnnouncementToSupabase(newAnno, context)
+                            isSubmitting = false
+                            if (res.first) {
+                                successMsg = "Announcement published successfully!"
+                                errorMsg = null
+                                showAddModal = false
+                                titleInput = ""
+                                messageInput = ""
+                            } else {
+                                successMsg = res.second
+                                showAddModal = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = EcoGreenPrimary),
+                    enabled = !isSubmitting
+                ) {
+                    if (isSubmitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
+                    } else {
+                        Text("Publish", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddModal = false }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            }
+        )
+    }
+
+    // Delete confirmation dialog
+    if (announcementToDelete != null) {
+        val target = announcementToDelete!!
+        AlertDialog(
+            onDismissRequest = { announcementToDelete = null },
+            containerColor = DarkSurfaceCard,
+            title = { Text("Delete Announcement", color = HazardousRed, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to delete '${target.title}' from database?", color = TextOnDarkPrimary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            HakotRepository.deleteAnnouncementFromSupabase(target.id, context)
+                            announcementToDelete = null
+                            Toast.makeText(context, "Announcement deleted.", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = HazardousRed)
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { announcementToDelete = null }) {
+                    Text("Cancel", color = TextOnDarkSecondary)
+                }
+            }
+        )
+    }
+}
+
+private fun openStorageConnection(p: String, tok: String): HttpURLConnection {
+    val cleanPath = p.removePrefix("certificates/").removePrefix("/").trim()
+    val urls = listOf(
+        "${SupabaseClient.SUPABASE_URL}/storage/v1/object/authenticated/certificates/$cleanPath",
+        "${SupabaseClient.SUPABASE_URL}/storage/v1/object/public/certificates/$cleanPath",
+        "${SupabaseClient.SUPABASE_URL}/storage/v1/object/authenticated/$p",
+        "${SupabaseClient.SUPABASE_URL}/storage/v1/object/public/$p"
+    )
+    var lastConn: HttpURLConnection? = null
+    for (urlStr in urls) {
+        try {
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("apikey", SupabaseClient.SUPABASE_ANON_KEY)
+                if (tok.isNotBlank() && tok != SupabaseClient.SUPABASE_ANON_KEY) {
+                    setRequestProperty("Authorization", "Bearer $tok")
+                }
+                connectTimeout = 15000
+                readTimeout = 15000
+            }
+            val code = conn.responseCode
+            if (code in 200..299) {
+                return conn
+            } else {
+                lastConn?.disconnect()
+                lastConn = conn
+            }
+        } catch (_: Exception) {}
+    }
+    return lastConn ?: throw Exception("Object not found in storage")
+}
+
 
 

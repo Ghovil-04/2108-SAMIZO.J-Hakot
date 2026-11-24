@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -36,8 +35,7 @@ import com.example.hakot.ui.theme.TextOnDarkSecondary
 enum class HakotTab(val label: String, val icon: ImageVector) {
     MAP("Home", Icons.Default.LocationOn),
     SCHEDULE("Schedules", Icons.Default.CalendarMonth),
-    REPORT("Report", Icons.Default.ReportProblem),
-    MORE("More", Icons.Default.Menu)
+    REPORT("Report", Icons.Default.ReportProblem)
 }
 
 @Composable
@@ -59,7 +57,7 @@ fun HakotBottomBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             HakotTab.entries.forEach { tab ->
-                val isSelected = selectedTab == tab && tab != HakotTab.MORE
+                val isSelected = selectedTab == tab
 
                 Box(
                     modifier = Modifier
